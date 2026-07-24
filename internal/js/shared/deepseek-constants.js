@@ -14,8 +14,49 @@ const DEFAULT_BASE_HEADERS = Object.freeze({
   Host: 'chat.deepseek.com',
   Accept: 'application/json',
   'Content-Type': 'application/json',
-  'x-client-bundle-id': 'com.deepseek.chat',
-  'x-client-timezone-offset': '28800',
+});
+
+// chromeMajorVersion 与 Go 侧 transport 层 utls.HelloChrome_Auto 保持一致。
+const CHROME_MAJOR_VERSION = '128';
+const CHROME_USER_AGENT = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${CHROME_MAJOR_VERSION}.0.0.0 Safari/537.36`;
+const CHROME_SEC_CH_UA = `"Not.A/Brand";v="8", "Chromium";v="${CHROME_MAJOR_VERSION}", "Google Chrome";v="${CHROME_MAJOR_VERSION}"`;
+
+const WEB_BROWSER_HEADERS = Object.freeze({
+  'User-Agent': CHROME_USER_AGENT,
+  'sec-ch-ua': CHROME_SEC_CH_UA,
+  'sec-ch-ua-mobile': '?0',
+  'sec-ch-ua-platform': '"Windows"',
+  Origin: 'https://chat.deepseek.com',
+  Referer: 'https://chat.deepseek.com/',
+  'sec-fetch-site': 'same-origin',
+  'sec-fetch-mode': 'cors',
+  'sec-fetch-dest': 'empty',
+});
+
+const LOCALE_TIMEZONE_OFFSETS = Object.freeze({
+  zh_CN: '28800',
+  zh_TW: '28800',
+  en_US: '-420',
+  en_GB: '3600',
+  ja_JP: '32400',
+  ko_KR: '32400',
+  de_DE: '7200',
+  fr_FR: '7200',
+  ru_RU: '18000',
+  es_ES: '7200',
+});
+
+const LOCALE_ACCEPT_LANGUAGES = Object.freeze({
+  zh_CN: 'zh-CN,zh;q=0.9',
+  zh_TW: 'zh-TW,zh;q=0.9',
+  en_US: 'en-US,en;q=0.9',
+  en_GB: 'en-GB,en;q=0.9',
+  ja_JP: 'ja-JP,ja;q=0.9',
+  ko_KR: 'ko-KR,ko;q=0.9',
+  de_DE: 'de-DE,de;q=0.9',
+  fr_FR: 'fr-FR,fr;q=0.9',
+  ru_RU: 'ru-RU,ru;q=0.9',
+  es_ES: 'es-ES,es;q=0.9',
 });
 
 const DEFAULT_SKIP_PATTERNS = Object.freeze([
@@ -48,14 +89,36 @@ function normalizeClient(raw) {
   };
 }
 
+function timezoneOffsetFor(locale) {
+  const key = asNonEmptyString(locale);
+  return key && LOCALE_TIMEZONE_OFFSETS[key] ? LOCALE_TIMEZONE_OFFSETS[key] : '28800';
+}
+
+function acceptLanguageFor(locale) {
+  const key = asNonEmptyString(locale);
+  return key && LOCALE_ACCEPT_LANGUAGES[key] ? LOCALE_ACCEPT_LANGUAGES[key] : 'zh-CN,zh;q=0.9';
+}
+
+function isWebPlatform(platform) {
+  return asNonEmptyString(platform).toLowerCase() === 'web';
+}
+
 function buildBaseHeaders(parsed, client) {
   const rawBaseHeaders = parsed && typeof parsed.base_headers === 'object' && !Array.isArray(parsed.base_headers)
     ? parsed.base_headers
     : {};
   const baseHeaders = { ...DEFAULT_BASE_HEADERS, ...rawBaseHeaders };
-  if (client.name && client.version) {
+
+  const locale = client.locale || 'zh_CN';
+  baseHeaders['x-client-timezone-offset'] = timezoneOffsetFor(locale);
+
+  if (isWebPlatform(client.platform)) {
+    Object.assign(baseHeaders, WEB_BROWSER_HEADERS);
+    baseHeaders['Accept-Language'] = acceptLanguageFor(locale);
+  } else if (client.name && client.version) {
     baseHeaders['User-Agent'] = `${client.name}/${client.version}`;
   }
+
   if (client.platform) {
     baseHeaders['x-client-platform'] = client.platform;
   }
@@ -117,9 +180,17 @@ module.exports = {
   BASE_HEADERS: Object.freeze(shared.baseHeaders),
   SKIP_PATTERNS: Object.freeze(shared.skipPatterns),
   SKIP_EXACT_PATHS: new Set(shared.skipExactPaths),
+  WEB_BROWSER_HEADERS: Object.freeze({ ...WEB_BROWSER_HEADERS }),
+  CHROME_USER_AGENT,
+  CHROME_SEC_CH_UA,
+  timezoneOffsetFor,
+  acceptLanguageFor,
+  isWebPlatform,
   __test: {
     buildBaseHeaders,
     normalizeClient,
     sharedConstantsPaths,
+    timezoneOffsetFor,
+    acceptLanguageFor,
   },
 };

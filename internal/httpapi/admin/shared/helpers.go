@@ -170,8 +170,10 @@ func toAccount(m map[string]any) config.Account {
 		Email:    email,
 		Mobile:   mobile,
 		Password: fieldString(m, "password"),
+		DeviceID: fieldString(m, "device_id"),
 		ProxyID:  fieldString(m, "proxy_id"),
 		PoolType: config.NormalizePoolType(fieldString(m, "pool_type")),
+		Locale:   fieldString(m, "locale"),
 	}
 }
 
@@ -340,8 +342,10 @@ func normalizeAccountForStorage(acc config.Account) config.Account {
 	acc.Remark = strings.TrimSpace(acc.Remark)
 	acc.Email = strings.TrimSpace(acc.Email)
 	acc.Mobile = config.NormalizeMobileForStorage(acc.Mobile)
+	acc.DeviceID = strings.TrimSpace(acc.DeviceID)
 	acc.ProxyID = strings.TrimSpace(acc.ProxyID)
 	acc.PoolType = config.NormalizePoolType(acc.PoolType)
+	acc.Locale = strings.TrimSpace(acc.Locale)
 	return acc
 }
 

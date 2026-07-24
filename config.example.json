@@ -23,7 +23,8 @@
       "name": "主账号",
       "remark": "优先用于生产流量",
       "email": "example1@example.com",
-      "password": "your-password-1"
+      "password": "your-password-1",
+      "locale": "zh_CN"
     },
     {
       "_comment": "邮箱登录方式 - 账号2",

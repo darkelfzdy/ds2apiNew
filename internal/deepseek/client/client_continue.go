@@ -61,6 +61,7 @@ func (c *Client) callContinue(ctx context.Context, a *auth.RequestAuth, sessionI
 		"message_id":         responseMessageID,
 		"fallback_to_resume": true,
 	}
+	applySessionReferer(headers, payload)
 	config.Logger.Info("[auto_continue] calling continue", "session_id", sessionID, "message_id", responseMessageID)
 	captureSession := c.capture.Start("deepseek_continue", dsprotocol.DeepSeekContinueURL, a.AccountID, payload)
 	resp, err := c.streamPost(ctx, clients.stream, dsprotocol.DeepSeekContinueURL, headers, payload)

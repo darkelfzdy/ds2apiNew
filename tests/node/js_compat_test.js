@@ -23,7 +23,8 @@ test('js shared constants derive client headers from shared json', () => {
   assert.equal(deepseekConstants.CLIENT_VERSION, client.version);
   assert.equal(deepseekConstants.BASE_HEADERS['x-client-version'], client.version);
   assert.equal(deepseekConstants.BASE_HEADERS['x-client-platform'], 'web');
-  assert.equal(deepseekConstants.BASE_HEADERS['x-client-bundle-id'], undefined);
+  // 真实网页版抓包确认 platform=web 同样携带此头。
+  assert.equal(deepseekConstants.BASE_HEADERS['x-client-bundle-id'], 'com.deepseek.chat');
   assert.equal(deepseekConstants.BASE_HEADERS['Content-Type'], 'application/json');
   // web 平台应使用 Chrome User-Agent，与 Go 侧 utls.HelloChrome_Auto 一致。
   assert.ok(deepseekConstants.BASE_HEADERS['User-Agent'].includes('Chrome'), `unexpected user agent=${deepseekConstants.BASE_HEADERS['User-Agent']}`);

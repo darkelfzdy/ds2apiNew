@@ -4,7 +4,14 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
+	// 内嵌 IANA 时区库：运行镜像（debian slim / scratch）不保证自带 tzdata，
+	// 缺失时 time.LoadLocation 会失败并让所有账号退回东八区。
+	_ "time/tzdata"
+
+	"ds2api/internal/deepseek/transport"
 )
 
 const (
@@ -27,21 +34,42 @@ const (
 	DeepSeekUploadTargetPath        = "/api/v0/file/upload_file"
 )
 
-// chromeMajorVersion 与 transport 层 utls.HelloChrome_Auto 保持一致，
-// 使 TLS 指纹与 HTTP 层的 Chrome User-Agent 属于同一代浏览器。
-const chromeMajorVersion = "128"
+// chromeMajorVersion 直接取自 transport 层，与 uTLS ClientHello 同源，
+// 避免两边各写一份常量后随依赖升级悄悄错开
+// （曾出现 TLS 指纹是 Chrome 133、User-Agent 却自称 128 的矛盾）。
+const chromeMajorVersion = transport.ChromeMajorVersion
 
 var chromeUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" + chromeMajorVersion + ".0.0.0 Safari/537.36"
-var chromeSecChUA = "\"Not.A/Brand\";v=\"8\", \"Chromium\";v=\"" + chromeMajorVersion + "\", \"Google Chrome\";v=\"" + chromeMajorVersion + "\""
+
+// chromeSecChUA 的 GREASE 品牌串和品牌顺序都随 Chrome 版本变化，
+// 这里的形式取自 chat.deepseek.com 网页版真实抓包（Chrome 150）。
+// 换版本时必须重新抓包核对，不能照着旧版本推。
+var chromeSecChUA = "\"Not;A=Brand\";v=\"8\", \"Chromium\";v=\"" + chromeMajorVersion + "\", \"Google Chrome\";v=\"" + chromeMajorVersion + "\""
 
 var defaultStaticBaseHeaders = map[string]string{
 	"Host":         "chat.deepseek.com",
 	"Accept":       "application/json",
 	"Content-Type": "application/json",
+	// 真实网页版确实会发这个头。它一度被当作 App 专属头移除，属于误判——
+	// 抓包显示 platform=web 的浏览器请求同样携带。
+	"x-client-bundle-id": "com.deepseek.chat",
 }
 
+// 关于 x-hif-dliq / x-hif-leim：不要添加这两个头。
+//
+// 真实网页版在「正常窗口」下会额外发送这两个 base64 值。经抓包验证：
+//   - 同一账号每次请求都相同，切模型、传文件、登出重登都不变；
+//   - 无痕窗口下二者完全消失；
+//   - login、chat_session/delete 等接口本来就不带。
+//
+// 无痕下消失说明它读的是持久化存储而非硬件环境（否则同机同浏览器应算出同值），
+// 因此「不带」是一个真实且可复现的浏览器状态，本项目的请求就等价于无痕会话。
+//
+// 更重要的是：它是设备级标识。抓一份填进配置会让所有账号共享同一个设备指纹，
+// 「N 个账号同一台设备」是比缺失强得多的关联信号。除非能为每个账号取得
+// 各自独立的合法值，否则伪造只会让情况变糟。
+//
 // webBrowserHeaders 是 platform=web 时 DeepSeek 网页版浏览器应有的头。
-// 与 utls.HelloChrome_Auto 配合，使 TLS 指纹与 HTTP 头自洽。
 var webBrowserHeaders = map[string]string{
 	"User-Agent":         chromeUserAgent,
 	"sec-ch-ua":          chromeSecChUA,
@@ -52,24 +80,44 @@ var webBrowserHeaders = map[string]string{
 	"sec-fetch-site":     "same-origin",
 	"sec-fetch-mode":     "cors",
 	"sec-fetch-dest":     "empty",
+	// 浏览器 fetch 发的是 */*，不是 application/json。
+	// 只覆盖 web 平台：登录接口沿用 App 风格头（见 LoginHeaders）。
+	"Accept": "*/*",
+	// 必须显式声明：否则 Go/fhttp 会自动补一个只含 gzip 的 accept-encoding，
+	// 而自称 Chrome 却只接受 gzip 是明显异常。响应解压见 client.decompressBody。
+	"Accept-Encoding": "gzip, deflate, br, zstd",
+	// Chrome 12x+ 在 fetch/XHR 上会带 priority。
+	"priority": "u=1, i",
 }
 
-// localeTimezoneOffsets 按 locale 给出 x-client-timezone-offset 的秒偏移，
-// 避免所有账号都硬编码成 28800（东八区）。
-var localeTimezoneOffsets = map[string]string{
-	"zh_CN": "28800",
-	"zh_TW": "28800",
-	"en_US": "-420",
-	"en_GB": "3600",
-	"ja_JP": "32400",
-	"ko_KR": "32400",
-	"de_DE": "7200",
-	"fr_FR": "7200",
-	"ru_RU": "18000",
-	"es_ES": "7200",
+// localeTimezones 把 locale 映射到 IANA 时区。偏移在请求时从时区数据实时计算，
+// 而不是写死常量：真实浏览器报告的是「当前」偏移，含夏令时。写死的话，
+// 带夏令时的地区一年里有半年是错的。
+//
+// 单位是秒。此前 en_US 被写成分钟制的 -420，等于宣称自己在 UTC-00:07 ——
+// 这个时区并不存在，比硬编码东八区更容易被识别。
+var localeTimezones = map[string]string{
+	"zh_CN": "Asia/Shanghai",
+	"zh_TW": "Asia/Taipei",
+	"en_US": "America/Los_Angeles",
+	"en_GB": "Europe/London",
+	"ja_JP": "Asia/Tokyo",
+	"ko_KR": "Asia/Seoul",
+	"de_DE": "Europe/Berlin",
+	"fr_FR": "Europe/Paris",
+	"ru_RU": "Europe/Moscow",
+	"es_ES": "Europe/Madrid",
 }
 
-// localeAcceptLanguages 按 locale 给出 Accept-Language 值。
+const defaultTimezoneOffset = "28800" // UTC+8，未知 locale 的回退值
+
+// localeAcceptLanguages 按 locale 给出 Accept-Language。
+//
+// 这里用的是「只配了母语」的 Chrome 默认形态（如 zh-CN,zh;q=0.9）。
+// 曾一度改成带英语兜底链的长形式 "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7"，
+// 那是抓包自一个额外添加了英语的 Chrome 配置文件；对照组（无痕、默认配置）
+// 发的是短形式。这个头取决于用户的语言设置，不是浏览器版本特征，
+// 短形式对应默认安装，是更保守的选择。
 var localeAcceptLanguages = map[string]string{
 	"zh_CN": "zh-CN,zh;q=0.9",
 	"zh_TW": "zh-TW,zh;q=0.9",
@@ -248,12 +296,19 @@ func IsWebPlatform(platform string) bool {
 	return strings.EqualFold(strings.TrimSpace(platform), "web")
 }
 
-// TimezoneOffsetFor 返回 locale 对应的时区偏移（秒），未知时回退到东八区。
+// TimezoneOffsetFor 返回 locale 对应的当前时区偏移（秒，含夏令时），
+// 未知 locale 或时区数据缺失时回退到东八区。
 func TimezoneOffsetFor(locale string) string {
-	if offset, ok := localeTimezoneOffsets[strings.TrimSpace(locale)]; ok {
-		return offset
+	zone, ok := localeTimezones[strings.TrimSpace(locale)]
+	if !ok {
+		return defaultTimezoneOffset
 	}
-	return "28800"
+	loc, err := time.LoadLocation(zone)
+	if err != nil {
+		return defaultTimezoneOffset
+	}
+	_, offset := time.Now().In(loc).Zone()
+	return strconv.Itoa(offset)
 }
 
 // AcceptLanguageFor 返回 locale 对应的 Accept-Language，未知时回退到中文。
@@ -261,7 +316,18 @@ func AcceptLanguageFor(locale string) string {
 	if lang, ok := localeAcceptLanguages[strings.TrimSpace(locale)]; ok {
 		return lang
 	}
-	return "zh-CN,zh;q=0.9"
+	return localeAcceptLanguages["zh_CN"]
+}
+
+// ChatSessionReferer 返回某个会话页面的 URL。
+// 真实浏览器在发送消息时，Referer 是当前会话页而不是站点根路径——
+// 根路径只出现在还没有会话的新对话首帧。
+func ChatSessionReferer(sessionID string) string {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return "https://chat.deepseek.com/"
+	}
+	return "https://chat.deepseek.com/a/chat/s/" + sessionID
 }
 
 func cloneStringMap(in map[string]string) map[string]string {

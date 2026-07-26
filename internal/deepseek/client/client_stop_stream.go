@@ -33,6 +33,7 @@ func (c *Client) StopStream(ctx context.Context, a *auth.RequestAuth, sessionID 
 		"chat_session_id": sessionID,
 		"message_id":      messageID,
 	}
+	applySessionReferer(headers, payload)
 	resp, status, err := c.postJSONWithStatus(ctx, clients.regular, clients.fallback, dsprotocol.DeepSeekStopStreamURL, headers, payload)
 	if err != nil {
 		config.Logger.Warn("[stop_stream] request error", "session_id", sessionID, "message_id", messageID, "account", a.AccountID, "error", err)
@@ -52,6 +53,7 @@ func (c *Client) FireCompletionAndStop(ctx context.Context, a *auth.RequestAuth,
 	clients := c.requestClientsForAuth(ctx, a)
 	headers := c.authHeaders(a.DeepSeekToken, a.Account.Locale)
 	headers["x-ds-pow-response"] = powResp
+	applySessionReferer(headers, payload)
 	captureSession := c.capture.Start("deepseek_completion", dsprotocol.DeepSeekCompletionURL, a.AccountID, payload)
 	resp, err := c.streamPostOnce(ctx, clients.stream, dsprotocol.DeepSeekCompletionURL, headers, payload)
 	if err != nil {

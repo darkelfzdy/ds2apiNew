@@ -14,12 +14,16 @@ const DEFAULT_BASE_HEADERS = Object.freeze({
   Host: 'chat.deepseek.com',
   Accept: 'application/json',
   'Content-Type': 'application/json',
+  // 真实网页版抓包确认 platform=web 同样携带此头，早前当作 App 专属移除是误判。
+  'x-client-bundle-id': 'com.deepseek.chat',
 });
 
-// chromeMajorVersion 与 Go 侧 transport 层 utls.HelloChrome_Auto 保持一致。
-const CHROME_MAJOR_VERSION = '128';
+// 必须与 Go 侧 internal/deepseek/transport.ChromeMajorVersion 一致。
+// 注意：Node 路径（Vercel）走原生 fetch，拿不到 uTLS，TLS/HTTP2 指纹无法伪装，
+// 这里只能保证 HTTP 头自洽。详见 docs/DEPLOY.md 的风险说明。
+const CHROME_MAJOR_VERSION = '150';
 const CHROME_USER_AGENT = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${CHROME_MAJOR_VERSION}.0.0.0 Safari/537.36`;
-const CHROME_SEC_CH_UA = `"Not.A/Brand";v="8", "Chromium";v="${CHROME_MAJOR_VERSION}", "Google Chrome";v="${CHROME_MAJOR_VERSION}"`;
+const CHROME_SEC_CH_UA = `"Not;A=Brand";v="8", "Chromium";v="${CHROME_MAJOR_VERSION}", "Google Chrome";v="${CHROME_MAJOR_VERSION}"`;
 
 const WEB_BROWSER_HEADERS = Object.freeze({
   'User-Agent': CHROME_USER_AGENT,
@@ -31,21 +35,31 @@ const WEB_BROWSER_HEADERS = Object.freeze({
   'sec-fetch-site': 'same-origin',
   'sec-fetch-mode': 'cors',
   'sec-fetch-dest': 'empty',
+  // 浏览器 fetch 发 */*，不是 application/json。
+  Accept: '*/*',
+  // Chrome 12x+ 在 fetch/XHR 上会带 priority。
+  // 这里不设置 accept-encoding：Node 的 fetch/undici 自己协商并解压，
+  // 手动覆盖会让它把压缩后的字节原样交出来。
+  priority: 'u=1, i',
 });
 
-const LOCALE_TIMEZONE_OFFSETS = Object.freeze({
-  zh_CN: '28800',
-  zh_TW: '28800',
-  en_US: '-420',
-  en_GB: '3600',
-  ja_JP: '32400',
-  ko_KR: '32400',
-  de_DE: '7200',
-  fr_FR: '7200',
-  ru_RU: '18000',
-  es_ES: '7200',
+// locale -> IANA 时区。偏移在调用时实时计算（含夏令时），与 Go 侧一致。
+const LOCALE_TIMEZONES = Object.freeze({
+  zh_CN: 'Asia/Shanghai',
+  zh_TW: 'Asia/Taipei',
+  en_US: 'America/Los_Angeles',
+  en_GB: 'Europe/London',
+  ja_JP: 'Asia/Tokyo',
+  ko_KR: 'Asia/Seoul',
+  de_DE: 'Europe/Berlin',
+  fr_FR: 'Europe/Paris',
+  ru_RU: 'Europe/Moscow',
+  es_ES: 'Europe/Madrid',
 });
 
+const DEFAULT_TIMEZONE_OFFSET = '28800';
+
+// 「只配了母语」的 Chrome 默认形态，与 Go 侧保持一致（见 constants.go 的说明）。
 const LOCALE_ACCEPT_LANGUAGES = Object.freeze({
   zh_CN: 'zh-CN,zh;q=0.9',
   zh_TW: 'zh-TW,zh;q=0.9',
@@ -89,9 +103,42 @@ function normalizeClient(raw) {
   };
 }
 
+// 返回该 IANA 时区此刻相对 UTC 的偏移秒数（含夏令时）。
+// 做法是把同一时刻按目标时区格式化，再当成 UTC 反解，两者之差即偏移。
+function zoneOffsetSeconds(zone, now) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: zone,
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).formatToParts(now);
+
+  const field = {};
+  for (const part of parts) field[part.type] = part.value;
+  const asUTC = Date.UTC(
+    Number(field.year),
+    Number(field.month) - 1,
+    Number(field.day),
+    Number(field.hour) % 24,
+    Number(field.minute),
+    Number(field.second),
+  );
+  // 抹掉毫秒，避免格式化时的秒级截断带来 ±1 秒抖动。
+  return Math.round((asUTC - Math.floor(now.getTime() / 1000) * 1000) / 1000);
+}
+
 function timezoneOffsetFor(locale) {
-  const key = asNonEmptyString(locale);
-  return key && LOCALE_TIMEZONE_OFFSETS[key] ? LOCALE_TIMEZONE_OFFSETS[key] : '28800';
+  const zone = LOCALE_TIMEZONES[asNonEmptyString(locale)];
+  if (!zone) return DEFAULT_TIMEZONE_OFFSET;
+  try {
+    return String(zoneOffsetSeconds(zone, new Date()));
+  } catch {
+    return DEFAULT_TIMEZONE_OFFSET;
+  }
 }
 
 function acceptLanguageFor(locale) {

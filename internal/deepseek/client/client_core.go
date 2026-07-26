@@ -27,6 +27,7 @@ type Client struct {
 	maxRetries int
 
 	powCache *powChallengeCache
+	cookies  *cookieJar
 
 	proxyClientsMu sync.RWMutex
 	proxyClients   map[string]requestClients
@@ -44,6 +45,7 @@ func NewClient(store *config.Store, resolver *auth.Resolver) *Client {
 		maxRetries:   3,
 		proxyClients: map[string]requestClients{},
 		powCache:     newPowChallengeCache(),
+		cookies:      newCookieJar(),
 	}
 	if resolver != nil {
 		resolver.PostLogin = func(ctx context.Context, a *auth.RequestAuth) {

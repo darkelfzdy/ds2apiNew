@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
+	fhttp2 "github.com/bogdanfinn/fhttp/http2"
 	utls "github.com/refraction-networking/utls"
-	"golang.org/x/net/http2"
 )
 
 type Doer interface {
@@ -21,21 +21,21 @@ type Doer interface {
 
 type DialContextFunc func(ctx context.Context, network, addr string) (net.Conn, error)
 
-// clientHelloID is the browser TLS fingerprint impersonated on every upstream
-// request. HelloChrome_Auto tracks a recent stable Chrome ClientHello so the
-// JA3/JA4 fingerprint matches a real browser instead of Go's default stack.
-var clientHelloID = utls.HelloChrome_Auto
-
 // Client dials upstream over uTLS so the TLS ClientHello (JA3/JA4) impersonates
 // Chrome, then speaks HTTP/2 or HTTP/1.1 according to the negotiated ALPN.
+//
+// The HTTP/2 layer is fhttp rather than golang.org/x/net/http2 so the SETTINGS
+// frame, connection WINDOW_UPDATE, pseudo-header order and header order match
+// Chrome as well. See chrome.go — a Chrome TLS handshake followed by Go's
+// HTTP/2 preface is a stronger bot signal than not impersonating at all.
 type Client struct {
 	timeout     time.Duration
 	dialContext DialContextFunc
-	h2          *http2.Transport
+	h2          *fhttp2.Transport
 
 	mu      sync.Mutex
-	conns   map[string]*http2.ClientConn // authority (host:port) -> pooled h2 conn
-	dialing map[string]*sync.Mutex       // per-authority dial serialization
+	conns   map[string]*fhttp2.ClientConn // authority (host:port) -> pooled h2 conn
+	dialing map[string]*sync.Mutex        // per-authority dial serialization
 }
 
 func New(timeout time.Duration) *Client {
@@ -46,18 +46,17 @@ func NewWithDialContext(timeout time.Duration, dialContext DialContextFunc) *Cli
 	if dialContext == nil {
 		dialContext = (&net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}).DialContext
 	}
+	h2 := newChromeH2Transport()
+	// ReadIdleTimeout keeps pooled conns healthy via PING; the conn is dialed
+	// and TLS-handshaked externally, so the h2 transport never dials itself.
+	h2.ReadIdleTimeout = 30 * time.Second
+	h2.PingTimeout = 15 * time.Second
 	return &Client{
 		timeout:     timeout,
 		dialContext: dialContext,
-		h2: &http2.Transport{
-			// ReadIdleTimeout keeps pooled conns healthy via PING; the conn is
-			// dialed and TLS-handshaked externally, so the h2 transport never
-			// dials itself.
-			ReadIdleTimeout: 30 * time.Second,
-			PingTimeout:     15 * time.Second,
-		},
-		conns:   make(map[string]*http2.ClientConn),
-		dialing: make(map[string]*sync.Mutex),
+		h2:          h2,
+		conns:       make(map[string]*fhttp2.ClientConn),
+		dialing:     make(map[string]*sync.Mutex),
 	}
 }
 
@@ -93,9 +92,9 @@ func (c *Client) roundTrip(req *http.Request) (*http.Response, error) {
 
 	// Fast path: reuse a healthy pooled HTTP/2 connection.
 	if cc := c.takePooledConn(authority); cc != nil {
-		resp, err := cc.RoundTrip(req)
+		resp, err := cc.RoundTrip(toFHTTPRequest(req))
 		if err == nil {
-			return resp, nil
+			return fromFHTTPResponse(resp, req), nil
 		}
 		// The pooled conn was stale/broken; drop it and dial fresh below.
 		c.dropConn(authority, cc)
@@ -106,7 +105,11 @@ func (c *Client) roundTrip(req *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 	if alpn == "h2" {
-		return cc.RoundTrip(req)
+		resp, err := cc.RoundTrip(toFHTTPRequest(req))
+		if err != nil {
+			return nil, err
+		}
+		return fromFHTTPResponse(resp, req), nil
 	}
 
 	// HTTP/1.1: drive the request manually over the uTLS conn. The body owns
@@ -114,7 +117,7 @@ func (c *Client) roundTrip(req *http.Request) (*http.Response, error) {
 	return http1RoundTrip(conn, req)
 }
 
-func (c *Client) getConn(ctx context.Context, authority, serverName string) (*http2.ClientConn, net.Conn, string, error) {
+func (c *Client) getConn(ctx context.Context, authority, serverName string) (*fhttp2.ClientConn, net.Conn, string, error) {
 	// Fast path outside the dial lock so multiple requests can multiplex on an
 	// existing HTTP/2 connection concurrently.
 	if cc := c.takePooledConn(authority); cc != nil {
@@ -164,7 +167,7 @@ func (c *Client) dialTLS(ctx context.Context, authority, serverName string) (*ut
 	return uconn, uconn.ConnectionState().NegotiatedProtocol, nil
 }
 
-func (c *Client) takePooledConn(authority string) *http2.ClientConn {
+func (c *Client) takePooledConn(authority string) *fhttp2.ClientConn {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	cc, ok := c.conns[authority]
@@ -178,13 +181,13 @@ func (c *Client) takePooledConn(authority string) *http2.ClientConn {
 	return cc
 }
 
-func (c *Client) storeConn(authority string, cc *http2.ClientConn) {
+func (c *Client) storeConn(authority string, cc *fhttp2.ClientConn) {
 	c.mu.Lock()
 	c.conns[authority] = cc
 	c.mu.Unlock()
 }
 
-func (c *Client) dropConn(authority string, cc *http2.ClientConn) {
+func (c *Client) dropConn(authority string, cc *fhttp2.ClientConn) {
 	c.mu.Lock()
 	if c.conns[authority] == cc {
 		delete(c.conns, authority)
@@ -207,11 +210,11 @@ func (c *Client) dialMutex(authority string) *sync.Mutex {
 // CloseIdleConnections closes all pooled HTTP/2 connections.
 func (c *Client) CloseIdleConnections() {
 	c.mu.Lock()
-	conns := make([]*http2.ClientConn, 0, len(c.conns))
+	conns := make([]*fhttp2.ClientConn, 0, len(c.conns))
 	for _, cc := range c.conns {
 		conns = append(conns, cc)
 	}
-	c.conns = make(map[string]*http2.ClientConn)
+	c.conns = make(map[string]*fhttp2.ClientConn)
 	c.mu.Unlock()
 	for _, cc := range conns {
 		_ = cc.Close()

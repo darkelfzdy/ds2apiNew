@@ -41,6 +41,11 @@ type Account struct {
 	Locale     string  `json:"locale,omitempty"`
 	Disabled   bool    `json:"disabled,omitempty"`
 	MutedUntil float64 `json:"muted_until,omitempty"`
+	// CooldownUntil 是本地风控冷却到期时间（Unix 秒）。
+	// 与 MutedUntil 不同：MutedUntil 由上游下发，CooldownUntil 是我们自己
+	// 在收到验证码挑战后主动设置的——挑战意味着风控已经盯上这个账号，
+	// 继续用它只会把情况变得更糟。
+	CooldownUntil float64 `json:"cooldown_until,omitempty"`
 }
 
 type APIKey struct {

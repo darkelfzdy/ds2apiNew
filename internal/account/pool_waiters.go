@@ -22,10 +22,7 @@ func (p *Pool) canQueueLocked(target string, exclude map[string]bool, filter Acc
 		if !ok {
 			return false
 		}
-		if !acc.IsEnabled() {
-			return false
-		}
-		if acc.IsMuted() {
+		if !acc.IsSchedulable() {
 			return false
 		}
 		if filter != nil && !filter(acc) {
@@ -44,10 +41,7 @@ func (p *Pool) canQueueLocked(target string, exclude map[string]bool, filter Acc
 		if !ok {
 			continue
 		}
-		if !acc.IsEnabled() {
-			continue
-		}
-		if acc.IsMuted() {
+		if !acc.IsSchedulable() {
 			continue
 		}
 		if filter != nil && !filter(acc) {

@@ -11,6 +11,7 @@ import (
 
 	"ds2api/internal/auth"
 	"ds2api/internal/config"
+	dsprotocol "ds2api/internal/deepseek/protocol"
 	"ds2api/internal/httpapi/openai/history"
 	"ds2api/internal/promptcompat"
 	"ds2api/internal/util"
@@ -117,6 +118,7 @@ func (h *Handler) handleVercelStreamPrepare(w http.ResponseWriter, r *http.Reque
 		"deepseek_token":   a.DeepSeekToken,
 		"pow_header":       powHeader,
 		"payload":          payload,
+		"base_headers":     dsprotocol.BaseHeadersFor(a.Account.Locale),
 	})
 }
 
@@ -278,6 +280,7 @@ func (h *Handler) handleVercelStreamSwitch(w http.ResponseWriter, r *http.Reques
 		"deepseek_token":   a.DeepSeekToken,
 		"pow_header":       powHeader,
 		"payload":          stdReq.CompletionPayload(sessionID),
+		"base_headers":     dsprotocol.BaseHeadersFor(a.Account.Locale),
 	})
 }
 

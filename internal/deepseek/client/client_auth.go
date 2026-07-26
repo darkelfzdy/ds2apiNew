@@ -8,7 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"ds2api/internal/account"
@@ -22,6 +25,9 @@ func (c *Client) Login(ctx context.Context, acc config.Account) (string, error) 
 		return "", err
 	}
 	acc.DeviceID = deviceID
+	// Start the new session with a clean jar: replaying cookies issued against
+	// the previous token alongside a freshly minted one is incoherent.
+	c.cookies.forget(acc.Identifier())
 	clients := c.requestClientsForAccount(acc)
 	payload := map[string]any{
 		"email":     "",
@@ -40,7 +46,7 @@ func (c *Client) Login(ctx context.Context, acc config.Account) (string, error) 
 	} else {
 		return "", errors.New("missing email/mobile")
 	}
-	resp, err := c.postJSON(ctx, clients.regular, clients.fallback, dsprotocol.DeepSeekLoginURL, dsprotocol.BaseHeaders, payload)
+	resp, err := c.postJSON(ctx, clients.regular, clients.fallback, dsprotocol.DeepSeekLoginURL, dsprotocol.LoginHeaders(acc.Locale), payload)
 	if err != nil {
 		return "", err
 	}
@@ -151,6 +157,64 @@ func (c *Client) persistMutedUntil(identifier string, muteUntil float64) {
 	}
 }
 
+// captchaCooldown is how long an account is benched after a captcha challenge.
+// A challenge means risk control has already flagged this account; continuing
+// to drive traffic through it is the fastest way to escalate to a mute.
+// Override with DS2API_CAPTCHA_COOLDOWN_MINUTES.
+const defaultCaptchaCooldownMinutes = 30
+
+func captchaCooldownDuration() time.Duration {
+	if raw := strings.TrimSpace(os.Getenv("DS2API_CAPTCHA_COOLDOWN_MINUTES")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n >= 0 {
+			return time.Duration(n) * time.Minute
+		}
+	}
+	return defaultCaptchaCooldownMinutes * time.Minute
+}
+
+// coolDownAfterCaptcha benches the account and reports whether it was applied.
+func (c *Client) coolDownAfterCaptcha(a *auth.RequestAuth, op string) {
+	if c == nil || a == nil || !a.UseConfigToken {
+		return
+	}
+	identifier := strings.TrimSpace(a.AccountID)
+	if identifier == "" {
+		return
+	}
+	cooldown := captchaCooldownDuration()
+	if cooldown <= 0 {
+		return
+	}
+	until := float64(time.Now().Add(cooldown).Unix())
+	c.persistCooldownUntil(identifier, until)
+	a.Account.CooldownUntil = until
+	config.Logger.Warn("[captcha] account cooled down after challenge",
+		"op", op, "account", identifier, "cooldown_minutes", int(cooldown.Minutes()), "until", until)
+}
+
+// persistCooldownUntil stores the cooldown deadline, mirroring how a mute is
+// persisted so an elastic pool can promote a standby account in its place.
+func (c *Client) persistCooldownUntil(identifier string, until float64) {
+	if c == nil || c.Store == nil || strings.TrimSpace(identifier) == "" || until <= 0 {
+		return
+	}
+	if err := c.Store.Update(func(cfg *config.Config) error {
+		for i := range cfg.Accounts {
+			if cfg.Accounts[i].Identifier() != identifier {
+				continue
+			}
+			cfg.Accounts[i].CooldownUntil = until
+			break
+		}
+		if cfg.ElasticPool.Enabled {
+			account.ReconcileElasticPool(cfg)
+		}
+		return nil
+	}); err != nil {
+		config.Logger.Error("[captcha] failed to persist cooldown_until", "account", identifier, "error", err)
+	}
+}
+
 func (c *Client) CreateSession(ctx context.Context, a *auth.RequestAuth, maxAttempts int) (string, error) {
 	if maxAttempts <= 0 {
 		maxAttempts = c.maxRetries
@@ -159,7 +223,7 @@ func (c *Client) CreateSession(ctx context.Context, a *auth.RequestAuth, maxAtte
 	attempts := 0
 	refreshed := false
 	for attempts < maxAttempts {
-		headers := c.authHeaders(a.DeepSeekToken)
+		headers := c.authHeaders(a.DeepSeekToken, a.Account.Locale)
 		resp, status, err := c.postJSONWithStatus(ctx, clients.regular, clients.fallback, dsprotocol.DeepSeekCreateSessionURL, headers, map[string]any{})
 		if err != nil {
 			config.Logger.Warn("[create_session] request error", "error", err, "account", a.AccountID)
@@ -174,7 +238,8 @@ func (c *Client) CreateSession(ctx context.Context, a *auth.RequestAuth, maxAtte
 			}
 		}
 		if ch := DetectCaptchaChallenge(resp); ch != nil {
-			config.Logger.Warn("[create_session] captcha challenge detected, account should be cooled down", "account", a.AccountID, "instruction", ch.Instruction, "image_url", ch.ImageURL, "rid", ch.Rid)
+			config.Logger.Warn("[create_session] captcha challenge detected", "account", a.AccountID, "instruction", ch.Instruction, "image_url", ch.ImageURL, "rid", ch.Rid)
+			c.coolDownAfterCaptcha(a, "create_session")
 			if a.UseConfigToken && c.Auth.SwitchAccount(ctx, a) {
 				refreshed = false
 				attempts++
@@ -219,7 +284,7 @@ func (c *Client) GetPowForTarget(ctx context.Context, a *auth.RequestAuth, targe
 	lastFailureKind := FailureUnknown
 	lastFailureMessage := ""
 	for attempts < maxAttempts {
-		headers := c.authHeaders(a.DeepSeekToken)
+		headers := c.authHeaders(a.DeepSeekToken, a.Account.Locale)
 		resp, status, err := c.postJSONWithStatus(ctx, clients.regular, clients.fallback, dsprotocol.DeepSeekCreatePowURL, headers, map[string]any{"target_path": targetPath})
 		if err != nil {
 			config.Logger.Warn("[get_pow] request error", "error", err, "account", a.AccountID, "target_path", targetPath)
@@ -241,7 +306,8 @@ func (c *Client) GetPowForTarget(ctx context.Context, a *auth.RequestAuth, targe
 			return BuildPowHeader(challenge, answer)
 		}
 		if ch := DetectCaptchaChallenge(resp); ch != nil {
-			config.Logger.Warn("[get_pow] captcha challenge detected, account should be cooled down", "account", a.AccountID, "target_path", targetPath, "instruction", ch.Instruction, "image_url", ch.ImageURL, "rid", ch.Rid)
+			config.Logger.Warn("[get_pow] captcha challenge detected", "account", a.AccountID, "target_path", targetPath, "instruction", ch.Instruction, "image_url", ch.ImageURL, "rid", ch.Rid)
+			c.coolDownAfterCaptcha(a, "get_pow")
 			lastFailureKind = FailureCaptchaRequired
 			lastFailureMessage = failureMessage(msg, bizMsg, "captcha challenge required")
 			if a.UseConfigToken && c.Auth.SwitchAccount(ctx, a) {
@@ -280,13 +346,18 @@ func (c *Client) GetPowForTarget(ctx context.Context, a *auth.RequestAuth, targe
 	return "", errors.New("get pow failed")
 }
 
-func (c *Client) authHeaders(token string) map[string]string {
-	headers := make(map[string]string, len(dsprotocol.BaseHeaders)+1)
-	for k, v := range dsprotocol.BaseHeaders {
-		headers[k] = v
-	}
+func (c *Client) authHeaders(token string, locale string) map[string]string {
+	headers := dsprotocol.BaseHeadersFor(locale)
 	headers["authorization"] = "Bearer " + token
 	return headers
+}
+
+// localeFromContext 尝试从上下文中提取账号 locale，供只有 token 的直通接口使用。
+func localeFromContext(ctx context.Context) string {
+	if a, ok := auth.FromContext(ctx); ok {
+		return strings.TrimSpace(a.Account.Locale)
+	}
+	return ""
 }
 
 func isTokenInvalid(status int, code int, bizCode int, msg string, bizMsg string) bool {

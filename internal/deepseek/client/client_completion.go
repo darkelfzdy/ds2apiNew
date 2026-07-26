@@ -18,8 +18,9 @@ import (
 func (c *Client) CallCompletion(ctx context.Context, a *auth.RequestAuth, payload map[string]any, powResp string, maxAttempts int) (*http.Response, error) {
 	_ = maxAttempts
 	clients := c.requestClientsForAuth(ctx, a)
-	headers := c.authHeaders(a.DeepSeekToken)
+	headers := c.authHeaders(a.DeepSeekToken, a.Account.Locale)
 	headers["x-ds-pow-response"] = powResp
+	applySessionReferer(headers, payload)
 	captureSession := c.capture.Start("deepseek_completion", dsprotocol.DeepSeekCompletionURL, a.AccountID, payload)
 	resp, err := c.streamPostOnce(ctx, clients.stream, dsprotocol.DeepSeekCompletionURL, headers, payload)
 	if err != nil {
@@ -164,4 +165,19 @@ func extractMuteUntil(resp map[string]any) float64 {
 func getStringFromMap(m map[string]any, key string) string {
 	s, _ := m[key].(string)
 	return s
+}
+
+// applySessionReferer points Referer at the conversation page the message
+// belongs to. A browser sending a message is sitting on /a/chat/s/<id>, so a
+// bare site root on every request is a mismatch between the header and the
+// action it accompanies.
+func applySessionReferer(headers map[string]string, payload map[string]any) {
+	if headers == nil || payload == nil {
+		return
+	}
+	sessionID := getStringFromMap(payload, "chat_session_id")
+	if strings.TrimSpace(sessionID) == "" {
+		return
+	}
+	headers["Referer"] = dsprotocol.ChatSessionReferer(sessionID)
 }

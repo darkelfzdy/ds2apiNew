@@ -41,6 +41,21 @@ func (a Account) IsMuted() bool {
 	return a.MutedUntil > float64(time.Now().Unix())
 }
 
+// IsCoolingDown reports whether the account is in a local risk-control cooldown
+// after a captcha challenge. Like IsMuted this expires on its own, so the pool
+// picks the account back up without any sweeper.
+func (a Account) IsCoolingDown() bool {
+	if a.CooldownUntil <= 0 {
+		return false
+	}
+	return a.CooldownUntil > float64(time.Now().Unix())
+}
+
+// IsSchedulable reports whether the pool may hand this account to a request.
+func (a Account) IsSchedulable() bool {
+	return a.IsEnabled() && !a.IsMuted() && !a.IsCoolingDown()
+}
+
 // NormalizePoolType 规范化账号号池类型，空值视为 default。
 func NormalizePoolType(poolType string) string {
 	switch strings.ToLower(strings.TrimSpace(poolType)) {

@@ -8,22 +8,31 @@ import (
 	"testing"
 )
 
-func TestProxyDialAddressUsesLocalResolutionForSocks5(t *testing.T) {
+// The target hostname must reach the SOCKS5 server unresolved, so the exit
+// node performs the DNS lookup. Resolving locally would leak DNS queries for
+// chat.deepseek.com from the machine running this proxy and could pin an
+// account to an edge IP inconsistent with its exit node's geography.
+func TestProxyDialAddressDoesNotResolveLocallyForSocks5(t *testing.T) {
 	ctx := context.Background()
-	resolved, err := proxyDialAddress(ctx, "socks5", "example.com:443", func(_ context.Context, network, host string) ([]string, error) {
-		if network != "ip" {
-			t.Fatalf("unexpected lookup network: %q", network)
-		}
-		if host != "example.com" {
-			t.Fatalf("unexpected lookup host: %q", host)
-		}
+	lookups := 0
+	resolved, err := proxyDialAddress(ctx, "socks5", "example.com:443", func(_ context.Context, _, _ string) ([]string, error) {
+		lookups++
 		return []string{"203.0.113.10"}, nil
 	})
 	if err != nil {
 		t.Fatalf("proxyDialAddress returned error: %v", err)
 	}
-	if resolved != "203.0.113.10:443" {
-		t.Fatalf("expected locally resolved address, got %q", resolved)
+	if resolved != "example.com:443" {
+		t.Fatalf("expected hostname to be passed through untouched, got %q", resolved)
+	}
+	if lookups != 0 {
+		t.Fatalf("expected no local DNS lookup, got %d", lookups)
+	}
+}
+
+func TestProxyDialAddressRejectsAddressWithoutPort(t *testing.T) {
+	if _, err := proxyDialAddress(context.Background(), "socks5", "example.com", nil); err == nil {
+		t.Fatal("expected an error for an address without a port")
 	}
 }
 

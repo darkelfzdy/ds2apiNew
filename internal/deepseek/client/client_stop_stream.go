@@ -28,11 +28,12 @@ func (c *Client) StopStream(ctx context.Context, a *auth.RequestAuth, sessionID 
 		return errors.New("missing stop_stream identifiers")
 	}
 	clients := c.requestClientsForAuth(ctx, a)
-	headers := c.authHeaders(a.DeepSeekToken)
+	headers := c.authHeaders(a.DeepSeekToken, a.Account.Locale)
 	payload := map[string]any{
 		"chat_session_id": sessionID,
 		"message_id":      messageID,
 	}
+	applySessionReferer(headers, payload)
 	resp, status, err := c.postJSONWithStatus(ctx, clients.regular, clients.fallback, dsprotocol.DeepSeekStopStreamURL, headers, payload)
 	if err != nil {
 		config.Logger.Warn("[stop_stream] request error", "session_id", sessionID, "message_id", messageID, "account", a.AccountID, "error", err)
@@ -50,8 +51,9 @@ func (c *Client) StopStream(ctx context.Context, a *auth.RequestAuth, sessionID 
 func (c *Client) FireCompletionAndStop(ctx context.Context, a *auth.RequestAuth, payload map[string]any, powResp string) (int, error) {
 	sessionID, _ := payload["chat_session_id"].(string)
 	clients := c.requestClientsForAuth(ctx, a)
-	headers := c.authHeaders(a.DeepSeekToken)
+	headers := c.authHeaders(a.DeepSeekToken, a.Account.Locale)
 	headers["x-ds-pow-response"] = powResp
+	applySessionReferer(headers, payload)
 	captureSession := c.capture.Start("deepseek_completion", dsprotocol.DeepSeekCompletionURL, a.AccountID, payload)
 	resp, err := c.streamPostOnce(ctx, clients.stream, dsprotocol.DeepSeekCompletionURL, headers, payload)
 	if err != nil {

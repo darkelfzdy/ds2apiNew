@@ -65,6 +65,15 @@ async function handleVercelStream(req, res, rawBody, payload) {
     return;
   }
 
+  let baseHeaders = prep.body.base_headers && typeof prep.body.base_headers === 'object'
+    ? { ...BASE_HEADERS, ...prep.body.base_headers }
+    : { ...BASE_HEADERS };
+  const updateBaseHeaders = (switchedBody) => {
+    if (switchedBody && switchedBody.base_headers && typeof switchedBody.base_headers === 'object') {
+      baseHeaders = { ...BASE_HEADERS, ...switchedBody.base_headers };
+    }
+  };
+
   const releaseLease = createLeaseReleaser(req, leaseID);
   const upstreamController = new AbortController();
   let clientClosed = false;
@@ -119,7 +128,7 @@ async function handleVercelStream(req, res, rawBody, payload) {
         return await fetch(url, {
           method: 'POST',
           headers: {
-            ...BASE_HEADERS,
+            ...baseHeaders,
             authorization: `Bearer ${deepseekToken}`,
             'x-ds-pow-response': powHeader,
           },
@@ -437,6 +446,7 @@ async function handleVercelStream(req, res, rawBody, payload) {
             deepseekToken = asString(switched.body.deepseek_token) || deepseekToken;
             currentPowHeader = asString(switched.body.pow_header) || currentPowHeader;
             activeDeepSeekSessionID = asString(switched.body.session_id) || activeDeepSeekSessionID;
+            updateBaseHeaders(switched.body);
             usagePrompt = finalPrompt;
             lastEmptyDetail = null;
             outputText = '';
@@ -462,6 +472,7 @@ async function handleVercelStream(req, res, rawBody, payload) {
             deepseekToken = asString(switched.body.deepseek_token) || deepseekToken;
             currentPowHeader = asString(switched.body.pow_header) || currentPowHeader;
             activeDeepSeekSessionID = asString(switched.body.session_id) || activeDeepSeekSessionID;
+            updateBaseHeaders(switched.body);
             usagePrompt = finalPrompt;
             outputText = '';
             thinkingText = '';

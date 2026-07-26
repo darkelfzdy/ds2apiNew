@@ -1,29 +1,31 @@
 package client
 
 import (
-	"compress/gzip"
 	"io"
 	"net/http"
 	"strings"
-
-	"github.com/andybalholm/brotli"
 )
 
+// readResponseBody reads a fully-buffered response body.
+//
+// Decompression normally already happened in wireDoer, which strips
+// Content-Encoding. The switch here is a defensive fallback for any response
+// that did not pass through that decorator.
 func readResponseBody(resp *http.Response) ([]byte, error) {
 	encoding := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Encoding")))
-	var reader io.Reader = resp.Body
 	switch encoding {
-	case "gzip":
-		gz, err := gzip.NewReader(resp.Body)
-		if err != nil {
-			return nil, err
-		}
-		defer func() { _ = gz.Close() }()
-		reader = gz
-	case "br":
-		reader = brotli.NewReader(resp.Body)
+	case "", "identity":
+		return io.ReadAll(resp.Body)
 	}
-	return io.ReadAll(reader)
+	decoded, err := decompressReader(resp.Body, encoding)
+	if err != nil {
+		return nil, err
+	}
+	if decoded == nil {
+		return io.ReadAll(resp.Body)
+	}
+	defer func() { _ = decoded.Close() }()
+	return io.ReadAll(decoded)
 }
 
 func preview(b []byte) string {

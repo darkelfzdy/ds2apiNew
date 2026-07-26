@@ -23,11 +23,16 @@ test('js shared constants derive client headers from shared json', () => {
   assert.equal(deepseekConstants.CLIENT_VERSION, client.version);
   assert.equal(deepseekConstants.BASE_HEADERS['x-client-version'], client.version);
   assert.equal(deepseekConstants.BASE_HEADERS['x-client-platform'], 'web');
-  assert.equal(deepseekConstants.BASE_HEADERS['User-Agent'], `DeepSeek/${client.version}`);
+  // 真实网页版抓包确认 platform=web 同样携带此头。
   assert.equal(deepseekConstants.BASE_HEADERS['x-client-bundle-id'], 'com.deepseek.chat');
   assert.equal(deepseekConstants.BASE_HEADERS['Content-Type'], 'application/json');
-  for (const h of ['sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform', 'sec-fetch-site', 'sec-fetch-mode', 'sec-fetch-dest', 'Referer', 'Origin', 'accept-language', 'accept-encoding', 'accept-charset']) {
-    assert.equal(deepseekConstants.BASE_HEADERS[h], undefined, `unexpected browser header present: ${h}`);
+  // web 平台应使用 Chrome User-Agent，与 Go 侧 utls.HelloChrome_Auto 一致。
+  assert.ok(deepseekConstants.BASE_HEADERS['User-Agent'].includes('Chrome'), `unexpected user agent=${deepseekConstants.BASE_HEADERS['User-Agent']}`);
+  for (const h of ['sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform', 'sec-fetch-site', 'sec-fetch-mode', 'sec-fetch-dest', 'Referer', 'Origin', 'Accept-Language']) {
+    assert.ok(deepseekConstants.BASE_HEADERS[h], `expected browser header missing: ${h}`);
+  }
+  for (const h of ['accept-encoding', 'accept-charset']) {
+    assert.equal(deepseekConstants.BASE_HEADERS[h], undefined, `unexpected header present: ${h}`);
   }
 });
 

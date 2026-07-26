@@ -20,8 +20,8 @@ import (
 type requestClients struct {
 	regular   trans.Doer
 	stream    trans.Doer
-	fallback  *http.Client
-	fallbackS *http.Client
+	fallback  trans.Doer
+	fallbackS trans.Doer
 }
 
 type hostLookupFunc func(ctx context.Context, network, host string) ([]string, error)
@@ -32,29 +32,18 @@ var defaultHostLookup hostLookupFunc = func(ctx context.Context, _ string, host 
 	return net.DefaultResolver.LookupHost(ctx, host)
 }
 
-func proxyDialAddress(ctx context.Context, proxyType, address string, lookup hostLookupFunc) (string, error) {
-	proxyType = strings.ToLower(strings.TrimSpace(proxyType))
-	if proxyType != "socks5" {
-		return address, nil
-	}
-	host, port, err := net.SplitHostPort(address)
-	if err != nil {
+// proxyDialAddress returns the address to hand to the proxy dialer.
+//
+// The hostname is passed through untouched so the SOCKS5 server resolves it at
+// the exit node (SOCKS5 ATYP=3, which golang.org/x/net/proxy speaks natively).
+// Resolving locally first would leak DNS queries for chat.deepseek.com from the
+// host running this proxy, and could pin an account's traffic to an edge IP
+// that does not match the geography of its exit node.
+func proxyDialAddress(_ context.Context, _, address string, _ hostLookupFunc) (string, error) {
+	if _, _, err := net.SplitHostPort(address); err != nil {
 		return "", err
 	}
-	if net.ParseIP(host) != nil {
-		return address, nil
-	}
-	if lookup == nil {
-		lookup = defaultHostLookup
-	}
-	addrs, err := lookup(ctx, "ip", host)
-	if err != nil {
-		return "", err
-	}
-	if len(addrs) == 0 {
-		return "", fmt.Errorf("no ip address resolved for %s", host)
-	}
-	return net.JoinHostPort(addrs[0], port), nil
+	return address, nil
 }
 
 func proxyCacheKey(proxyCfg config.Proxy) string {
@@ -93,11 +82,24 @@ func proxyDialContext(proxyCfg config.Proxy) (trans.DialContextFunc, error) {
 }
 
 func (c *Client) defaultRequestClients() requestClients {
-	return requestClients{
+	return c.decorate(requestClients{
 		regular:   c.regular,
 		stream:    c.stream,
 		fallback:  c.fallback,
 		fallbackS: c.fallbackS,
+	})
+}
+
+// decorate layers per-account cookie replay and response decompression over a
+// bundle. Both have to apply on every path, including the std-transport
+// fallbacks, so responses look identical to callers regardless of which
+// transport served them.
+func (c *Client) decorate(bundle requestClients) requestClients {
+	return requestClients{
+		regular:   newWireDoer(bundle.regular, c.cookies),
+		stream:    newWireDoer(bundle.stream, c.cookies),
+		fallback:  newWireDoer(bundle.fallback, c.cookies),
+		fallbackS: newWireDoer(bundle.fallbackS, c.cookies),
 	}
 }
 
@@ -153,12 +155,12 @@ func (c *Client) requestClientsForAccount(acc config.Account) requestClients {
 		return c.defaultRequestClients()
 	}
 
-	bundle := requestClients{
+	bundle := c.decorate(requestClients{
 		regular:   trans.NewWithDialContext(60*time.Second, dialContext),
 		stream:    trans.NewWithDialContext(0, dialContext),
 		fallback:  trans.NewFallbackClient(60*time.Second, dialContext),
 		fallbackS: trans.NewFallbackClient(0, dialContext),
-	}
+	})
 
 	c.proxyClientsMu.Lock()
 	if c.proxyClients == nil {

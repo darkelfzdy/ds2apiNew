@@ -38,8 +38,14 @@ type Account struct {
 	DeviceID   string  `json:"device_id,omitempty"`
 	ProxyID    string  `json:"proxy_id,omitempty"`
 	PoolType   string  `json:"pool_type,omitempty"`
+	Locale     string  `json:"locale,omitempty"`
 	Disabled   bool    `json:"disabled,omitempty"`
 	MutedUntil float64 `json:"muted_until,omitempty"`
+	// CooldownUntil 是本地风控冷却到期时间（Unix 秒）。
+	// 与 MutedUntil 不同：MutedUntil 由上游下发，CooldownUntil 是我们自己
+	// 在收到验证码挑战后主动设置的——挑战意味着风控已经盯上这个账号，
+	// 继续用它只会把情况变得更糟。
+	CooldownUntil float64 `json:"cooldown_until,omitempty"`
 }
 
 type APIKey struct {
@@ -106,6 +112,7 @@ func (c *Config) NormalizeCredentials() {
 		c.Accounts[i].Name = strings.TrimSpace(c.Accounts[i].Name)
 		c.Accounts[i].Remark = strings.TrimSpace(c.Accounts[i].Remark)
 		c.Accounts[i].DeviceID = strings.TrimSpace(c.Accounts[i].DeviceID)
+		c.Accounts[i].Locale = strings.TrimSpace(c.Accounts[i].Locale)
 		c.Accounts[i].PoolType = NormalizePoolType(c.Accounts[i].PoolType)
 	}
 

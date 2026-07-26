@@ -84,7 +84,7 @@ func (c *Client) UploadFile(ctx context.Context, a *auth.RequestAuth, req Upload
 			}
 			clients = c.requestClientsForAuth(ctx, a)
 		}
-		headers := c.authHeaders(a.DeepSeekToken)
+		headers := c.authHeaders(a.DeepSeekToken, a.Account.Locale)
 		headers["Content-Type"] = contentTypeHeader
 		if modelType != "" {
 			headers["x-model-type"] = modelType

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"ds2api/internal/config"
 	trans "ds2api/internal/deepseek/transport"
@@ -71,6 +72,10 @@ func (c *Client) getJSONWithStatus(ctx context.Context, doer trans.Doer, url str
 		return nil, 0, err
 	}
 	for k, v := range headers {
+		// A GET carries no body, so a browser never sends Content-Type on one.
+		if strings.EqualFold(k, "Content-Type") {
+			continue
+		}
 		req.Header.Set(k, v)
 	}
 	resp, err := doer.Do(req)

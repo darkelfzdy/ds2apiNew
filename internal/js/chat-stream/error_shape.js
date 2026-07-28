@@ -13,6 +13,21 @@ function writeOpenAIError(res, status, message) {
   );
 }
 
+function writeOpenAIErrorWithCode(res, status, message, code) {
+  res.statusCode = status;
+  res.setHeader('Content-Type', 'application/json');
+  res.end(
+    JSON.stringify({
+      error: {
+        message,
+        type: openAIErrorType(status),
+        code,
+        param: null,
+      },
+    }),
+  );
+}
+
 function openAIErrorType(status) {
   switch (status) {
     case 400:
@@ -32,5 +47,6 @@ function openAIErrorType(status) {
 
 module.exports = {
   writeOpenAIError,
+  writeOpenAIErrorWithCode,
   openAIErrorType,
 };

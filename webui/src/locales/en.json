@@ -141,7 +141,7 @@
         "runtimeStatusUnknown": "Will be determined after sync",
         "testStatusFailed": "Last test failed",
         "accountDisabled": "Disabled",
-        "accountDisabledHint": "Account auto-disabled (upstream unavailable). Re-enable manually.",
+        "accountDisabledHint": "Account disabled manually. Will not be scheduled until re-enabled.",
         "accountMuted": "Muted (auto-disabled)",
         "accountMutedHint": "Account is muted by upstream. Will auto-recover after expiry.",
         "accountMutedRecoverAt": "Est. recovery {time}",

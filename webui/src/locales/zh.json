@@ -141,7 +141,7 @@
         "runtimeStatusUnknown": "状态以同步后为准",
         "testStatusFailed": "上次测试失败",
         "accountDisabled": "已禁用",
-        "accountDisabledHint": "账号已被自动禁用（上游不可用），需手动重新启用",
+        "accountDisabledHint": "账号已被手动禁用，启用前不再被号池调度",
         "accountMuted": "封号自动禁用",
         "accountMutedHint": "账号被上游禁言，到期后自动恢复调度",
         "accountMutedRecoverAt": "预计恢复时间 {time}",

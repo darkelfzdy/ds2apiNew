@@ -27,7 +27,7 @@ func (a Account) Identifier() string {
 }
 
 // IsEnabled reports whether the account is eligible for scheduling.
-// Disabled accounts are skipped by the pool and auto-disabled on upstream_unavailable.
+// Disabled accounts are skipped by the pool.
 func (a Account) IsEnabled() bool {
 	return !a.Disabled
 }

@@ -10,7 +10,7 @@ const {
   formatOpenAIStreamToolCalls,
 } = require('../helpers/stream-tool-sieve');
 const { BASE_HEADERS } = require('../shared/deepseek-constants');
-const { writeOpenAIError, openAIErrorType } = require('./error_shape');
+const { writeOpenAIError, writeOpenAIErrorWithCode, openAIErrorType } = require('./error_shape');
 const { parseChunkForContent, isCitation } = require('./sse_parse');
 const { buildUsage } = require('./token_usage');
 const {
@@ -162,6 +162,30 @@ async function handleVercelStream(req, res, rawBody, payload) {
     }
     if (clientClosed) {
       return;
+    }
+
+    // 当 DeepSeek 返回封号 JSON（HTTP 200 + JSON body）时，持久化 mute_until 并切换账号。
+    const mutedUntil = await detectMutedResponse(completionRes);
+    if (mutedUntil > 0) {
+      const switched = await fetchStreamSwitch(req, leaseID, { mute_until: mutedUntil });
+      if (switched.ok && switched.body && switched.body.payload && typeof switched.body.payload === 'object') {
+        completionPayload = switched.body.payload;
+        deepseekToken = asString(switched.body.deepseek_token) || deepseekToken;
+        currentPowHeader = asString(switched.body.pow_header) || currentPowHeader;
+        activeDeepSeekSessionID = asString(switched.body.session_id) || activeDeepSeekSessionID;
+        updateBaseHeaders(switched.body);
+        completionRes = await fetchCompletion(completionPayload);
+        if (completionRes === null) {
+          return;
+        }
+        if (clientClosed) {
+          return;
+        }
+      } else {
+        await releaseLease();
+        writeOpenAIErrorWithCode(res, 403, 'Account is muted by upstream.', 'account_muted');
+        return;
+      }
     }
 
     if (!completionRes.ok || !completionRes.body) {
@@ -731,6 +755,46 @@ function sendFailedChunk(res, status, message, code) {
   if (typeof res.flush === 'function') {
     res.flush();
   }
+}
+
+// 检测 DeepSeek 是否返回了封号 JSON 响应（HTTP 200 但 body 是 JSON 而非 SSE）。
+// 返回 mute_until Unix 时间戳，未检测到则返回 0。
+async function detectMutedResponse(res) {
+  if (!res || !res.ok || !res.body) {
+    return 0;
+  }
+  try {
+    const clone = res.clone();
+    const data = await clone.json();
+    return extractMuteUntil(data);
+  } catch (_err) {
+    return 0;
+  }
+}
+
+// 从 DeepSeek 响应中解析 mute_until。
+// 匹配规则与 Go 侧 detectMutedCompletion/isMutedJSONResponse 对齐：
+// - data.biz_code == 5，或 data.biz_msg 包含 "muted"，视为封号；
+// - 优先取 data.biz_data.mute_until。
+function extractMuteUntil(data) {
+  if (!data || typeof data !== 'object') {
+    return 0;
+  }
+  const d = data.data;
+  if (!d || typeof d !== 'object') {
+    return 0;
+  }
+  const bizMsg = asString(d.biz_msg).toLowerCase();
+  const bizCode = Number(d.biz_code) || 0;
+  if (bizCode !== 5 && !bizMsg.includes('muted')) {
+    return 0;
+  }
+  const bizData = d.biz_data;
+  if (!bizData || typeof bizData !== 'object') {
+    return 0;
+  }
+  const muteUntil = Number(bizData.mute_until);
+  return Number.isFinite(muteUntil) && muteUntil > 0 ? muteUntil : 0;
 }
 
 module.exports = {

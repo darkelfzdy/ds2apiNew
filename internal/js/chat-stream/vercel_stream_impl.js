@@ -165,9 +165,12 @@ async function handleVercelStream(req, res, rawBody, payload) {
     }
 
     // 当 DeepSeek 返回封号 JSON（HTTP 200 + JSON body）时，持久化 mute_until 并切换账号。
-    const mutedUntil = await detectMutedResponse(completionRes);
-    if (mutedUntil > 0) {
-      const switched = await fetchStreamSwitch(req, leaseID, { mute_until: mutedUntil });
+    const detection = await detectMutedResponse(completionRes);
+    if (detection.response) {
+      completionRes = detection.response;
+    }
+    if (detection.mutedUntil > 0) {
+      const switched = await fetchStreamSwitch(req, leaseID, { mute_until: detection.mutedUntil });
       if (switched.ok && switched.body && switched.body.payload && typeof switched.body.payload === 'object') {
         completionPayload = switched.body.payload;
         deepseekToken = asString(switched.body.deepseek_token) || deepseekToken;
@@ -758,17 +761,55 @@ function sendFailedChunk(res, status, message, code) {
 }
 
 // 检测 DeepSeek 是否返回了封号 JSON 响应（HTTP 200 但 body 是 JSON 而非 SSE）。
-// 返回 mute_until Unix 时间戳，未检测到则返回 0。
+// 与 Go 侧 detectMutedCompletion 对齐：先 peek 第一个字节，只有 JSON 才读取全部 body。
+// 返回 { mutedUntil, response }：
+//   - mutedUntil > 0 时表示检测到封号，response 为 null；
+//   - mutedUntil === 0 时，response 为可能经过恢复的 Response（SSE body 未被消耗）。
 async function detectMutedResponse(res) {
   if (!res || !res.ok || !res.body) {
-    return 0;
+    return { mutedUntil: 0, response: res };
+  }
+  const reader = res.body.getReader();
+  let firstChunk;
+  try {
+    const result = await reader.read();
+    if (result.done || !result.value || result.value.length === 0) {
+      reader.releaseLock();
+      return { mutedUntil: 0, response: res };
+    }
+    firstChunk = result.value;
+  } catch (_err) {
+    try { reader.releaseLock(); } catch (_e) {}
+    return { mutedUntil: 0, response: res };
+  }
+  if (firstChunk[0] !== 0x7b) { // '{'
+    const newBody = new ReadableStream({
+      start(controller) {
+        controller.enqueue(firstChunk);
+        const pump = () => reader.read().then(({ done, value }) => {
+          if (done) {
+            controller.close();
+            return;
+          }
+          controller.enqueue(value);
+          return pump();
+        }).catch(err => controller.error(err));
+        pump();
+      },
+    });
+    return { mutedUntil: 0, response: new Response(newBody, res) };
+  }
+  const chunks = [firstChunk];
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
   }
   try {
-    const clone = res.clone();
-    const data = await clone.json();
-    return extractMuteUntil(data);
+    const data = JSON.parse(Buffer.concat(chunks).toString('utf-8'));
+    return { mutedUntil: extractMuteUntil(data), response: null };
   } catch (_err) {
-    return 0;
+    return { mutedUntil: 0, response: null };
   }
 }
 

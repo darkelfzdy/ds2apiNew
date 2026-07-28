@@ -915,3 +915,116 @@ test('trimContinuationOverlap preserves short normal tokens and trims long snaps
   const incoming = `${existing}继续分析`;
   assert.equal(trimContinuationOverlap(existing, incoming), '继续分析');
 });
+
+test('vercel stream detects muted JSON and switches account', async () => {
+  const originalFetch = global.fetch;
+  const fetchURLs = [];
+  let completionCalls = 0;
+  global.fetch = async (url, init = {}) => {
+    const textURL = String(url);
+    fetchURLs.push(textURL);
+    if (textURL.includes('__stream_prepare=1')) {
+      return jsonResponse({
+        session_id: 'chatcmpl-test',
+        lease_id: 'lease-test',
+        model: 'gpt-test',
+        final_prompt: 'hello',
+        thinking_enabled: false,
+        search_enabled: false,
+        tool_names: [],
+        deepseek_token: 'token-1',
+        pow_header: 'pow-1',
+        payload: { prompt: 'hello' },
+      });
+    }
+    if (textURL.includes('__stream_switch=1')) {
+      return jsonResponse({
+        session_id: 'chatcmpl-test',
+        lease_id: 'lease-test',
+        model: 'gpt-test',
+        final_prompt: 'hello',
+        thinking_enabled: false,
+        search_enabled: false,
+        tool_names: [],
+        deepseek_token: 'token-2',
+        pow_header: 'pow-2',
+        payload: { prompt: 'hello' },
+      });
+    }
+    if (textURL.includes('__stream_release=1')) {
+      return jsonResponse({ success: true });
+    }
+    if (textURL === 'https://chat.deepseek.com/api/v0/chat/completion') {
+      completionCalls += 1;
+      if (completionCalls === 1) {
+        return jsonResponse({
+          code: 0,
+          data: {
+            biz_code: 5,
+            biz_msg: 'user is muted',
+            biz_data: { mute_until: 1234567890 },
+          },
+        });
+      }
+      return sseResponse(['data: {"p":"response/content","v":"visible"}\n\n', 'data: [DONE]\n\n']);
+    }
+    throw new Error(`unexpected fetch url: ${textURL}`);
+  };
+  try {
+    const req = new MockStreamRequest();
+    const res = new MockStreamResponse();
+    const payload = { model: 'gpt-test', stream: true };
+    await handleVercelStream(req, res, Buffer.from(JSON.stringify(payload)), payload);
+    const frames = parseSSEDataFrames(res.bodyText());
+    const parsed = frames.filter((frame) => frame !== '[DONE]').map((frame) => JSON.parse(frame));
+    assert.equal(fetchURLs.filter((url) => url.includes('__stream_switch=1')).length, 1);
+    assert.equal(completionCalls, 2);
+    assert.equal(parsed[0].choices[0].delta.content, 'visible');
+    assert.equal(parsed[1].choices[0].finish_reason, 'stop');
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('vercel stream does not consume SSE body during mute detection', async () => {
+  const originalFetch = global.fetch;
+  const fetchURLs = [];
+  global.fetch = async (url, init = {}) => {
+    const textURL = String(url);
+    fetchURLs.push(textURL);
+    if (textURL.includes('__stream_prepare=1')) {
+      return jsonResponse({
+        session_id: 'chatcmpl-test',
+        lease_id: 'lease-test',
+        model: 'gpt-test',
+        final_prompt: 'hello',
+        thinking_enabled: false,
+        search_enabled: false,
+        tool_names: [],
+        deepseek_token: 'deepseek-token',
+        pow_header: 'pow-header',
+        payload: { prompt: 'hello' },
+      });
+    }
+    if (textURL.includes('__stream_release=1')) {
+      return jsonResponse({ success: true });
+    }
+    if (textURL === 'https://chat.deepseek.com/api/v0/chat/completion') {
+      return sseResponse(['data: {"p":"response/content","v":"hello from stream"}\n\n', 'data: [DONE]\n\n']);
+    }
+    throw new Error(`unexpected fetch url: ${textURL}`);
+  };
+  try {
+    const req = new MockStreamRequest();
+    const res = new MockStreamResponse();
+    const payload = { model: 'gpt-test', stream: true };
+    await handleVercelStream(req, res, Buffer.from(JSON.stringify(payload)), payload);
+    const frames = parseSSEDataFrames(res.bodyText());
+    const parsed = frames.filter((frame) => frame !== '[DONE]').map((frame) => JSON.parse(frame));
+    assert.equal(fetchURLs.filter((url) => url.includes('__stream_switch=1')).length, 0);
+    assert.equal(parsed[0].choices[0].delta.content, 'hello from stream');
+    assert.equal(parsed[1].choices[0].finish_reason, 'stop');
+  } finally {
+    global.fetch = originalFetch;
+  }
+});

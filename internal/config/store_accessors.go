@@ -192,3 +192,12 @@ func (s *Store) ExpertPromptSegmentMaxChars() int {
 	}
 	return 160000
 }
+
+func (s *Store) AutoRouteVisionEnabled() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.cfg.AutoRouteVision.Enabled == nil {
+		return false
+	}
+	return *s.cfg.AutoRouteVision.Enabled
+}

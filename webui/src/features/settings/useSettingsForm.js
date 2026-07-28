@@ -19,6 +19,7 @@ const DEFAULT_FORM = {
     current_input_file: { enabled: false, min_chars: 0 },
     thinking_injection: { enabled: false, prompt: '', default_prompt: '' },
     expert_prompt_segment: { enabled: true, max_chars: 160000 },
+    auto_route_vision: { enabled: false },
     model_aliases_text: '{}',
 }
 
@@ -82,6 +83,9 @@ function fromServerForm(data) {
             enabled: data.expert_prompt_segment?.enabled ?? true,
             max_chars: Number(data.expert_prompt_segment?.max_chars ?? 160000),
         },
+        auto_route_vision: {
+            enabled: data.auto_route_vision?.enabled ?? false,
+        },
         model_aliases_text: JSON.stringify(data.model_aliases || {}, null, 2),
     }
 }
@@ -110,6 +114,9 @@ function toServerPayload(form) {
         expert_prompt_segment: {
             enabled: Boolean(form.expert_prompt_segment?.enabled ?? true),
             max_chars: Number(form.expert_prompt_segment?.max_chars ?? 160000),
+        },
+        auto_route_vision: {
+            enabled: Boolean(form.auto_route_vision?.enabled ?? false),
         },
     }
 }

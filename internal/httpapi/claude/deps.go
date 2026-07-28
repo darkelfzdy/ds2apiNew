@@ -30,6 +30,7 @@ type ConfigReader interface {
 	CurrentInputFileMinChars() int
 	ExpertPromptSegmentEnabled() bool
 	ExpertPromptSegmentMaxChars() int
+	AutoRouteVisionEnabled() bool
 }
 
 type OpenAIChatRunner interface {

@@ -51,6 +51,7 @@ type ConfigReader interface {
 	ThinkingInjectionPrompt() string
 	ExpertPromptSegmentEnabled() bool
 	ExpertPromptSegmentMaxChars() int
+	AutoRouteVisionEnabled() bool
 }
 
 type Deps struct {

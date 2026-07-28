@@ -774,6 +774,8 @@ data: {"type":"message_stop"}
 - `auto_delete`（`mode`：`none` / `single` / `all`；旧配置 `sessions=true` 仍按 `all` 处理）
 - `current_input_file`（`enabled` 默认返回 `false`、`min_chars`）
 - `thinking_injection`（`enabled` 默认返回 `false`、`prompt`、`default_prompt`）
+- `expert_prompt_segment`（`enabled` 默认返回 `true`、`max_chars`）
+- `auto_route_vision`（`enabled` 默认返回 `false`）
 - `model_aliases`
 - `env_backed`、`needs_vercel_sync`
 - `toolcall` 策略已固定为 `feature_match + high`，不再通过 settings 返回或修改
@@ -789,6 +791,8 @@ data: {"type":"message_stop"}
 - `auto_delete.mode`
 - `current_input_file.enabled` / `current_input_file.min_chars`
 - `thinking_injection.enabled` / `thinking_injection.prompt`
+- `expert_prompt_segment.enabled` / `expert_prompt_segment.max_chars`
+- `auto_route_vision.enabled`
 - `model_aliases`
 - `toolcall` 策略已固定，不再作为可写入字段
 

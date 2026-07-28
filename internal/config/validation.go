@@ -30,6 +30,9 @@ func ValidateConfig(c Config) error {
 	if err := ValidateExpertPromptSegmentConfig(c.ExpertPromptSegment); err != nil {
 		return err
 	}
+	if err := ValidateAutoRouteVisionConfig(c.AutoRouteVision); err != nil {
+		return err
+	}
 	if err := ValidateAccountProxyReferences(c.Accounts, c.Proxies); err != nil {
 		return err
 	}
@@ -130,6 +133,10 @@ func ValidateExpertPromptSegmentConfig(cfg ExpertPromptSegmentConfig) error {
 			return err
 		}
 	}
+	return nil
+}
+
+func ValidateAutoRouteVisionConfig(_ AutoRouteVisionConfig) error {
 	return nil
 }
 

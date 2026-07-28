@@ -10,6 +10,7 @@ import (
 
 type ConfigReader interface {
 	ModelAliases() map[string]string
+	AutoRouteVisionEnabled() bool
 }
 
 func NormalizeOpenAIChatRequest(store ConfigReader, req map[string]any, traceID string) (StandardRequest, error) {

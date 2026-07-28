@@ -443,6 +443,8 @@
         "thinkingInjectionDesc": "Disabled by default. When enabled, append a structured <think> checklist to the latest user message before prompt assembly.",
         "thinkingInjectionPrompt": "Thinking format prompt",
         "thinkingInjectionPromptHelp": "Leave empty to use the built-in default prompt shown as the input placeholder.",
+        "autoRouteVisionEnabled": "Auto-route to vision model",
+        "autoRouteVisionDesc": "When enabled, requests to non-vision models that contain images are automatically routed to the vision model for this turn.",
         "currentInputFileTitle": "Independent Split",
         "currentInputFileEnabled": "Independent split (by size)",
         "currentInputFileDesc": "Disabled by default. Once the character threshold is reached, upload the full context as a DS2API_HISTORY.txt context file.",

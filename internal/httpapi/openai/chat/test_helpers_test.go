@@ -22,6 +22,7 @@ type mockOpenAIConfig struct {
 	currentInputMin     int
 	thinkingInjection   *bool
 	thinkingPrompt      string
+	autoRouteVision     bool
 }
 
 func (m mockOpenAIConfig) ModelAliases() map[string]string     { return m.aliases }
@@ -49,6 +50,7 @@ func (m mockOpenAIConfig) ThinkingInjectionEnabled() bool {
 func (m mockOpenAIConfig) ThinkingInjectionPrompt() string { return m.thinkingPrompt }
 func (mockOpenAIConfig) ExpertPromptSegmentEnabled() bool  { return false }
 func (mockOpenAIConfig) ExpertPromptSegmentMaxChars() int  { return 120000 }
+func (m mockOpenAIConfig) AutoRouteVisionEnabled() bool    { return m.autoRouteVision }
 
 type streamStatusAuthStub struct{}
 

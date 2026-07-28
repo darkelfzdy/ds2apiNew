@@ -78,9 +78,13 @@ func (h *Handler) Responses(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
+	originalModel, rerouted := promptcompat.MaybeAutoRouteVision(req, h.Store)
 	if err := h.preprocessInlineFileInputs(r.Context(), a, req); err != nil {
 		writeOpenAIInlineFileError(w, err)
 		return
+	}
+	if rerouted {
+		promptcompat.StripImageBlocksFromRequest(req)
 	}
 	if !h.Auth.ToolsEnabledForRequest(r) {
 		delete(req, "tools")
@@ -91,6 +95,10 @@ func (h *Handler) Responses(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	if rerouted && originalModel != "" {
+		stdReq.RequestedModel = originalModel
+		stdReq.ResponseModel = originalModel
 	}
 	stdReq, err = h.applyCurrentInputFile(r.Context(), a, stdReq)
 	if err != nil {

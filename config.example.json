@@ -59,6 +59,9 @@
     "enabled": true,
     "max_chars": 160000
   },
+  "auto_route_vision": {
+    "enabled": false
+  },
   "embeddings": {
     "provider": "deterministic"
   },

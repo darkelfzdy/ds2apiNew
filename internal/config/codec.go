@@ -51,6 +51,9 @@ func (c Config) MarshalJSON() ([]byte, error) {
 	if c.ExpertPromptSegment.Enabled != nil || c.ExpertPromptSegment.MaxChars != 0 {
 		m["expert_prompt_segment"] = c.ExpertPromptSegment
 	}
+	if c.AutoRouteVision.Enabled != nil {
+		m["auto_route_vision"] = c.AutoRouteVision
+	}
 	if c.ElasticPool.Enabled || c.ElasticPool.PerPool || c.ElasticPool.GlobalCount != 0 || c.ElasticPool.DefaultCount != 0 || c.ElasticPool.NoToolsCount != 0 || c.ElasticPool.ToolsOnlyCount != 0 {
 		m["elastic_pool"] = c.ElasticPool
 	}
@@ -138,6 +141,10 @@ func (c *Config) UnmarshalJSON(b []byte) error {
 			if err := json.Unmarshal(v, &c.ExpertPromptSegment); err != nil {
 				return fmt.Errorf("invalid field %q: %w", k, err)
 			}
+		case "auto_route_vision":
+			if err := json.Unmarshal(v, &c.AutoRouteVision); err != nil {
+				return fmt.Errorf("invalid field %q: %w", k, err)
+			}
 		case "elastic_pool":
 			if err := json.Unmarshal(v, &c.ElasticPool); err != nil {
 				return fmt.Errorf("invalid field %q: %w", k, err)
@@ -188,6 +195,9 @@ func (c Config) Clone() Config {
 		ExpertPromptSegment: ExpertPromptSegmentConfig{
 			Enabled:  cloneBoolPtr(c.ExpertPromptSegment.Enabled),
 			MaxChars: c.ExpertPromptSegment.MaxChars,
+		},
+		AutoRouteVision: AutoRouteVisionConfig{
+			Enabled: cloneBoolPtr(c.AutoRouteVision.Enabled),
 		},
 		ElasticPool:      c.ElasticPool,
 		Vercel:           c.Vercel,

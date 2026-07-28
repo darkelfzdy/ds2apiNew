@@ -11,6 +11,7 @@ func (mockClaudeConfig) CurrentInputFileEnabled() bool     { return true }
 func (mockClaudeConfig) CurrentInputFileMinChars() int     { return 0 }
 func (mockClaudeConfig) ExpertPromptSegmentEnabled() bool  { return false }
 func (mockClaudeConfig) ExpertPromptSegmentMaxChars() int  { return 120000 }
+func (mockClaudeConfig) AutoRouteVisionEnabled() bool      { return false }
 
 func TestNormalizeClaudeRequestUsesGlobalAliasMapping(t *testing.T) {
 	req := map[string]any{

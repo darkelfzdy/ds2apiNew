@@ -46,6 +46,24 @@ export default function BehaviorSection({ t, form, setForm }) {
                         <span className="text-xs text-muted-foreground block">{t('settings.thinkingInjectionDesc')}</span>
                     </div>
                 </label>
+                <label className="flex items-start gap-3 rounded-lg border border-border bg-background/60 p-4">
+                    <input
+                        type="checkbox"
+                        checked={Boolean(form.auto_route_vision?.enabled ?? false)}
+                        onChange={(e) => setForm((prev) => ({
+                            ...prev,
+                            auto_route_vision: {
+                                ...prev.auto_route_vision,
+                                enabled: e.target.checked,
+                            },
+                        }))}
+                        className="mt-1 h-4 w-4 rounded border-border"
+                    />
+                    <div className="space-y-1">
+                        <span className="text-sm font-medium block">{t('settings.autoRouteVisionEnabled')}</span>
+                        <span className="text-xs text-muted-foreground block">{t('settings.autoRouteVisionDesc')}</span>
+                    </div>
+                </label>
                 <label className="text-sm space-y-2 md:col-span-2">
                     <span className="text-muted-foreground">{t('settings.thinkingInjectionPrompt')}</span>
                     <textarea

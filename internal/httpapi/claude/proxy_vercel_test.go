@@ -18,6 +18,7 @@ func (claudeProxyStoreStub) CurrentInputFileEnabled() bool    { return true }
 func (claudeProxyStoreStub) CurrentInputFileMinChars() int    { return 0 }
 func (claudeProxyStoreStub) ExpertPromptSegmentEnabled() bool { return false }
 func (claudeProxyStoreStub) ExpertPromptSegmentMaxChars() int { return 120000 }
+func (claudeProxyStoreStub) AutoRouteVisionEnabled() bool     { return false }
 
 type openAIProxyStub struct {
 	status int

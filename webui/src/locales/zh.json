@@ -443,6 +443,8 @@
         "thinkingInjectionDesc": "默认关闭。开启后在组装 prompt 前，将结构化思考检查清单追加到最新用户消息末尾。",
         "thinkingInjectionPrompt": "思考格式提示词",
         "thinkingInjectionPromptHelp": "留空时使用内置默认提示词；默认内容会显示在输入框占位文本中。",
+        "autoRouteVisionEnabled": "自动路由视觉模型",
+        "autoRouteVisionDesc": "开启后，当非视觉模型请求中包含图片时，自动将本次请求切换为 vision 模型处理。",
         "currentInputFileTitle": "独立拆分",
         "currentInputFileEnabled": "独立拆分（按量）",
         "currentInputFileDesc": "默认关闭。达到字符阈值后，将完整上下文上传为 DS2API_HISTORY.txt 上下文文件。",

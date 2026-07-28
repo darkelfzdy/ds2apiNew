@@ -298,6 +298,8 @@ OpenAI 文件相关实现：
   [internal/httpapi/openai/files/file_inline_upload.go](../internal/httpapi/openai/files/file_inline_upload.go)
 - 文件 ID 收集：
   [internal/promptcompat/file_refs.go](../internal/promptcompat/file_refs.go)
+- 自动路由视觉模型（`auto_route_vision`）：
+  [internal/promptcompat/image_route.go](../internal/promptcompat/image_route.go)
 
 OpenAI 的文件上传现在不再是"只传文件本体"的通用路径，而是会先根据请求里的 `model` 解析出 DeepSeek 的上传类型，并把它透传到上传接口的 `x-model-type`。当前可见的上传类型就是 `default` / `expert` / `vision`，其中 vision 请求上传图片时必须带上 `vision`，否则下游容易退回到仅文本或 OCR 语义。expert（pro）模型不支持文件上传，runtime 会在内联文件预处理和 current input file 阶段直接跳过，completion payload 的 `ref_file_ids` 也会被清空。这个模型类型会同时用于：
 
@@ -313,6 +315,29 @@ OpenAI 的文件上传现在不再是"只传文件本体"的通用路径，而�
 - “systemprompt 文件”通常只在 `ref_file_ids` 里
 
 除非调用方自己把文件内容展开后再塞进 system/developer 文本，否则文件内容不会自动出现在 prompt 正文。
+
+### 8.1 自动路由视觉模型（`auto_route_vision`）
+
+`auto_route_vision` 是行为设置中的开关，默认关闭。开启后，当客户端选择非 vision 模型（如 `deepseek-v4-flash`、`deepseek-v4-pro` 及其 alias）且**当前用户轮次**携带图片内容时，DS2API 会把本次请求临时路由到 `deepseek-v4-vision`（若原模型带 `-nothinking` 后缀则映射到 `deepseek-v4-vision-nothinking`），同时把图片块从 prompt 消息中剔除，仅保留已上传的文件引用。历史消息中的图片不会触发本次路由，因此不带新图片的 follow-up 请求会自动回到用户原来选择的模型。
+
+处理顺序：
+
+1. 在 OpenAI Chat / Responses handler 解码请求后，先调用 `promptcompat.MaybeAutoRouteVision` 判断是否需要切换模型；若需要，把 `req["model"]` 改写成 vision 模型。
+2. 随后走 `PreprocessInlineFileInputs` 上传 inline 图片；因为此时 `model` 已经是 vision，上传会带上 `model_type=vision`，确保下游视觉模型正确识别图片。
+3. 上传完成后调用 `promptcompat.StripImageBlocksFromRequest` 把消息中的图片块剔除，但 `ref_file_ids` 中仍然保留图片文件 ID。
+4. 标准化得到 `StandardRequest` 后，把 `RequestedModel` / `ResponseModel` 恢复成客户端最初请求的模型名，因此客户端看到的响应模型不变。
+5. 该路由仅作用于本次请求；后续无图片请求会继续使用客户端原本选择的模型。
+
+当前实现主要面向 OpenAI Chat / Responses 路径，因为该路径具备 inline 图片上传与 `ref_file_ids` 机制。Claude / Gemini 路径在配置接口层面已暴露该开关，但图片上传与剔除逻辑暂沿用各自现有转换行为。
+
+相关实现：
+
+- 路由与图片检测/剔除：
+  [internal/promptcompat/image_route.go](../internal/promptcompat/image_route.go)
+- OpenAI Chat 接入点：
+  [internal/httpapi/openai/chat/handler_chat.go](../internal/httpapi/openai/chat/handler_chat.go)
+- OpenAI Responses 接入点：
+  [internal/httpapi/openai/responses/responses_handler.go](../internal/httpapi/openai/responses/responses_handler.go)
 
 ## 9. 多轮历史为什么不会一直完整内联在 prompt
 
@@ -468,6 +493,7 @@ Parameters: ...
 - tool result 注入方式变更
 - tool prompt 模板或 tool_choice 约束变更
 - inline 文件上传 / 文件引用收集规则变更
+- `auto_route_vision` 开关、路由目标模型、图片剔除范围变更
 - current input file 触发条件、上传格式、`DS2API_HISTORY.txt` transcript 结构变更
 - expert 模式提示词分段（`expert_prompt_segment`）触发条件、切分算法或续发逻辑变更
 - 旧 `history_split` 字段忽略/清理行为变更
@@ -482,6 +508,7 @@ Parameters: ...
 - `internal/promptcompat/tool_prompt.go`
 - `internal/httpapi/openai/files/file_inline_upload.go`
 - `internal/promptcompat/file_refs.go`
+- `internal/promptcompat/image_route.go`
 - `internal/httpapi/openai/history/current_input_file.go`
 - `internal/completionruntime/nonstream.go`
 - `internal/promptcompat/responses_input_normalize.go`

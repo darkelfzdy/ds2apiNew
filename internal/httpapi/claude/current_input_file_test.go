@@ -25,6 +25,7 @@ func (claudeHistoryConfig) CurrentInputFileEnabled() bool     { return false }
 func (claudeHistoryConfig) CurrentInputFileMinChars() int     { return 0 }
 func (claudeHistoryConfig) ExpertPromptSegmentEnabled() bool  { return false }
 func (claudeHistoryConfig) ExpertPromptSegmentMaxChars() int  { return 120000 }
+func (claudeHistoryConfig) AutoRouteVisionEnabled() bool      { return false }
 
 func (claudeCurrentInputAuth) Determine(*http.Request) (*auth.RequestAuth, error) {
 	return &auth.RequestAuth{

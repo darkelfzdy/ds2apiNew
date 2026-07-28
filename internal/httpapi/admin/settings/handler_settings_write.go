@@ -17,7 +17,7 @@ func (h *Handler) updateSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	adminCfg, runtimeCfg, responsesCfg, embeddingsCfg, autoDeleteCfg, currentInputCfg, thinkingInjCfg, expertPromptSegCfg, aliasMap, err := parseSettingsUpdateRequest(req)
+	adminCfg, runtimeCfg, responsesCfg, embeddingsCfg, autoDeleteCfg, currentInputCfg, thinkingInjCfg, expertPromptSegCfg, autoRouteVisionCfg, aliasMap, err := parseSettingsUpdateRequest(req)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"detail": err.Error()})
 		return
@@ -34,6 +34,7 @@ func (h *Handler) updateSettings(w http.ResponseWriter, r *http.Request) {
 	thinkingInjectionPromptSet := hasNestedSettingsKey(req, "thinking_injection", "prompt")
 	expertPromptSegEnabledSet := hasNestedSettingsKey(req, "expert_prompt_segment", "enabled")
 	expertPromptSegMaxCharsSet := hasNestedSettingsKey(req, "expert_prompt_segment", "max_chars")
+	autoRouteVisionEnabledSet := hasNestedSettingsKey(req, "auto_route_vision", "enabled")
 
 	if err := h.Store.Update(func(c *config.Config) error {
 		if adminCfg != nil {
@@ -88,6 +89,9 @@ func (h *Handler) updateSettings(w http.ResponseWriter, r *http.Request) {
 			if expertPromptSegMaxCharsSet {
 				c.ExpertPromptSegment.MaxChars = expertPromptSegCfg.MaxChars
 			}
+		}
+		if autoRouteVisionCfg != nil && autoRouteVisionEnabledSet {
+			c.AutoRouteVision.Enabled = autoRouteVisionCfg.Enabled
 		}
 		if aliasMap != nil {
 			c.ModelAliases = aliasMap

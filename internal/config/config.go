@@ -21,6 +21,7 @@ type Config struct {
 	CurrentInputFile    CurrentInputFileConfig    `json:"current_input_file,omitempty"`
 	ThinkingInjection   ThinkingInjectionConfig   `json:"thinking_injection,omitempty"`
 	ExpertPromptSegment ExpertPromptSegmentConfig `json:"expert_prompt_segment,omitempty"`
+	AutoRouteVision     AutoRouteVisionConfig     `json:"auto_route_vision,omitempty"`
 	ElasticPool         ElasticPoolConfig         `json:"elastic_pool,omitempty"`
 	Vercel              VercelConfig              `json:"vercel,omitempty"`
 	VercelSyncHash      string                    `json:"_vercel_sync_hash,omitempty"`
@@ -197,6 +198,10 @@ type ThinkingInjectionConfig struct {
 type ExpertPromptSegmentConfig struct {
 	Enabled  *bool `json:"enabled,omitempty"`
 	MaxChars int   `json:"max_chars,omitempty"`
+}
+
+type AutoRouteVisionConfig struct {
+	Enabled *bool `json:"enabled,omitempty"`
 }
 
 // ElasticPoolConfig 控制弹性号池行为。

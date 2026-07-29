@@ -396,6 +396,122 @@ func TestHandleVercelStreamPrepareUploadsToolsSeparately(t *testing.T) {
 	}
 }
 
+func TestHandleVercelStreamPrepareAutoRouteVision(t *testing.T) {
+	t.Setenv("VERCEL", "1")
+	t.Setenv("DS2API_VERCEL_INTERNAL_SECRET", "stream-secret")
+
+	ds := &inlineUploadDSStub{}
+	h := &Handler{
+		Store: mockOpenAIConfig{
+			aliases:         config.DefaultModelAliases(),
+			autoRouteVision: true,
+		},
+		Auth: streamStatusAuthStub{},
+		DS:   ds,
+	}
+
+	reqBody, _ := json.Marshal(map[string]any{
+		"model": "deepseek-v4-flash",
+		"messages": []any{
+			map[string]any{"role": "user", "content": []any{
+				map[string]any{"type": "text", "text": "describe this"},
+				map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:image/png;base64,abc"}},
+			}},
+		},
+		"stream": true,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions?__stream_prepare=1", strings.NewReader(string(reqBody)))
+	req.Header.Set("Authorization", "Bearer direct-token")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Ds2-Internal-Token", "stream-secret")
+	rec := httptest.NewRecorder()
+
+	h.handleVercelStreamPrepare(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(ds.uploadCalls) != 1 {
+		t.Fatalf("expected 1 inline upload, got %d", len(ds.uploadCalls))
+	}
+	if ds.uploadCalls[0].ModelType != "vision" {
+		t.Fatalf("expected upload model_type=vision, got %q", ds.uploadCalls[0].ModelType)
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if got := body["model"]; got != "deepseek-v4-flash" {
+		t.Fatalf("expected response model deepseek-v4-flash, got %v", got)
+	}
+	payload, _ := body["payload"].(map[string]any)
+	if payload == nil {
+		t.Fatalf("expected payload object, got %#v", body["payload"])
+	}
+	if modelType := payload["model_type"]; modelType != "vision" {
+		t.Fatalf("expected payload model_type=vision, got %v", modelType)
+	}
+}
+
+func TestHandleVercelStreamPrepareAutoRouteVisionDisabledKeepsOriginalModel(t *testing.T) {
+	t.Setenv("VERCEL", "1")
+	t.Setenv("DS2API_VERCEL_INTERNAL_SECRET", "stream-secret")
+
+	ds := &inlineUploadDSStub{}
+	h := &Handler{
+		Store: mockOpenAIConfig{
+			aliases:         config.DefaultModelAliases(),
+			autoRouteVision: false,
+		},
+		Auth: streamStatusAuthStub{},
+		DS:   ds,
+	}
+
+	reqBody, _ := json.Marshal(map[string]any{
+		"model": "deepseek-v4-flash",
+		"messages": []any{
+			map[string]any{"role": "user", "content": []any{
+				map[string]any{"type": "text", "text": "describe this"},
+				map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:image/png;base64,abc"}},
+			}},
+		},
+		"stream": true,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions?__stream_prepare=1", strings.NewReader(string(reqBody)))
+	req.Header.Set("Authorization", "Bearer direct-token")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Ds2-Internal-Token", "stream-secret")
+	rec := httptest.NewRecorder()
+
+	h.handleVercelStreamPrepare(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(ds.uploadCalls) != 1 {
+		t.Fatalf("expected 1 inline upload, got %d", len(ds.uploadCalls))
+	}
+	if ds.uploadCalls[0].ModelType != "default" {
+		t.Fatalf("expected upload model_type=default, got %q", ds.uploadCalls[0].ModelType)
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if got := body["model"]; got != "deepseek-v4-flash" {
+		t.Fatalf("expected response model deepseek-v4-flash, got %v", got)
+	}
+	payload, _ := body["payload"].(map[string]any)
+	if payload == nil {
+		t.Fatalf("expected payload object, got %#v", body["payload"])
+	}
+	if modelType := payload["model_type"]; modelType != "default" {
+		t.Fatalf("expected payload model_type=default, got %v", modelType)
+	}
+}
+
 func TestHandleVercelStreamPrepareMapsCurrentInputFileManagedAuthFailureTo401(t *testing.T) {
 	t.Setenv("VERCEL", "1")
 	t.Setenv("DS2API_VERCEL_INTERNAL_SECRET", "stream-secret")

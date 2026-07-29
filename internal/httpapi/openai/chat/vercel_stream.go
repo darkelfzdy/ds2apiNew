@@ -54,9 +54,13 @@ func (h *Handler) handleVercelStreamPrepare(w http.ResponseWriter, r *http.Reque
 		writeOpenAIError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
+	originalModel, rerouted := promptcompat.MaybeAutoRouteVision(req, h.Store)
 	if err := h.preprocessInlineFileInputs(r.Context(), a, req); err != nil {
 		writeOpenAIInlineFileError(w, err)
 		return
+	}
+	if rerouted {
+		promptcompat.StripImageBlocksFromRequest(req)
 	}
 	if !util.ToBool(req["stream"]) {
 		writeOpenAIError(w, http.StatusBadRequest, "stream must be true")
@@ -69,6 +73,10 @@ func (h *Handler) handleVercelStreamPrepare(w http.ResponseWriter, r *http.Reque
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	if rerouted && originalModel != "" {
+		stdReq.RequestedModel = originalModel
+		stdReq.ResponseModel = originalModel
 	}
 	if !stdReq.Stream {
 		writeOpenAIError(w, http.StatusBadRequest, "stream must be true")

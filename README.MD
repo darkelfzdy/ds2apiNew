@@ -235,7 +235,7 @@ cp config.example.json config.json
 
 ### 方式二：Docker 运行
 
-从最新 Release 下载 `docker-compose.tar.gz`（内含 `docker-compose.yml`、`docker-compose.dev.yml`、`config.example.json`、`.env.example` 四个文件）：
+从最新 Release 下载 `docker-compose.tar.gz`（内含 `docker-compose.yml`、`config.example.json`、`.env.example`、`README.MD` 四个文件）：
 
 ```bash
 # 1. 下载并解压
@@ -289,6 +289,7 @@ Zeabur 首次空卷启动时可以没有 `/data/config.json`；DS2API 会先使�
 cp config.example.json config.json
 # 编辑 config.json
 ```
+> 提示：创建项目时，Application Preset保持为默认的`Other`即可。
 
 推荐：先本地把 `config.json` 转成 Base64，再粘贴到 `DS2API_CONFIG_JSON`，避免 JSON 格式错误：
 

@@ -10,6 +10,15 @@ These rules apply to all agent-made changes in this repository.
   - `./tests/scripts/check-refactor-line-gate.sh`
   - `./tests/scripts/run-unit-all.sh`
   - `npm run build --prefix webui`
+- Running on Windows:
+  - The shell scripts require Git Bash (Git for Windows).
+  - If Git Bash is installed but `bash` is not on `PATH`, invoke the scripts from PowerShell with the full path to `bash.exe`, for example:
+    ```powershell
+    & "C:\Program Files\Git\bin\bash.exe" -c "./scripts/lint.sh"
+    & "C:\Program Files\Git\bin\bash.exe" -c "./tests/scripts/check-refactor-line-gate.sh"
+    & "C:\Program Files\Git\bin\bash.exe" -c "./tests/scripts/run-unit-all.sh"
+    npm run build --prefix webui
+    ```
 
 ## Go Lint Rules
 
@@ -28,6 +37,7 @@ These rules apply to all agent-made changes in this repository.
 - Normalize protocol-specific request shapes into the project standard request/turn model first, run shared business logic in one place, then render back to the target protocol at the boundary.
 - Business logic that must stay globally consistent includes empty-output retry, thinking/reasoning handling, tool-call detection and policy, usage accounting, current-input-file injection, history persistence, file/reference handling, and completion payload assembly.
 - If a behavior must differ by protocol, keep the difference as an explicit adapter/rendering concern and document why it cannot live in the shared normalized path.
+- When adding a new feature, also verify that the Vercel path is wired into it.
 
 ## Documentation Sync
 

@@ -13,13 +13,16 @@ export GOLANGCI_LINT_CACHE="${GOLANGCI_LINT_CACHE:-${ROOT_DIR}/.tmp/golangci-lin
 mkdir -p "$GOCACHE" "$GOLANGCI_LINT_CACHE"
 
 bootstrap_golangci_lint() {
-  local version_no_v os arch artifact archive_url tmp_dir
+  local version_no_v os arch artifact archive_url tmp_dir archive_ext binary_name
   version_no_v="${BOOTSTRAP_VERSION#v}"
   os="$(uname -s | tr '[:upper:]' '[:lower:]')"
   arch="$(uname -m | tr '[:upper:]' '[:lower:]')"
+  archive_ext="tar.gz"
+  binary_name="golangci-lint"
 
   case "$os" in
-    linux|darwin|windows) ;;
+    linux|darwin) ;;
+    windows|mingw*|msys*|cygwin*) os="windows"; archive_ext="zip"; binary_name="golangci-lint.exe" ;;
     *)
       echo "unsupported OS for bootstrap: ${os}" >&2
       return 1
@@ -36,15 +39,18 @@ bootstrap_golangci_lint() {
   esac
 
   artifact="${os}-${arch}"
-  archive_url="https://github.com/golangci/golangci-lint/releases/download/${BOOTSTRAP_VERSION}/golangci-lint-${version_no_v}-${artifact}.tar.gz"
+  archive_url="https://github.com/golangci/golangci-lint/releases/download/${BOOTSTRAP_VERSION}/golangci-lint-${version_no_v}-${artifact}.${archive_ext}"
 
   mkdir -p "${ROOT_DIR}/.tmp"
   tmp_dir="$(mktemp -d)"
   trap 'rm -rf "${tmp_dir}"' RETURN
 
-  curl -sSfL "${archive_url}" -o "${tmp_dir}/golangci-lint.tar.gz"
-  tar -xzf "${tmp_dir}/golangci-lint.tar.gz" -C "${tmp_dir}"
-  cp "${tmp_dir}/golangci-lint-${version_no_v}-${artifact}/golangci-lint" "${BOOTSTRAP_BIN}"
+  curl -sSfL "${archive_url}" -o "${tmp_dir}/golangci-lint.${archive_ext}"
+  case "$archive_ext" in
+    zip) unzip -q "${tmp_dir}/golangci-lint.${archive_ext}" -d "${tmp_dir}" ;;
+    *) tar -xzf "${tmp_dir}/golangci-lint.${archive_ext}" -C "${tmp_dir}" ;;
+  esac
+  cp "${tmp_dir}/golangci-lint-${version_no_v}-${artifact}/${binary_name}" "${BOOTSTRAP_BIN}"
   chmod +x "${BOOTSTRAP_BIN}"
 
   echo "bootstrapped golangci-lint ${BOOTSTRAP_VERSION} to ${BOOTSTRAP_BIN}" >&2

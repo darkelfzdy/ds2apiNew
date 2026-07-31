@@ -193,6 +193,48 @@ func (s *Store) ExpertPromptSegmentMaxChars() int {
 	return 160000
 }
 
+func (s *Store) ExpertTextFileInlineEnabled() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.cfg.ExpertTextFileInline.Enabled == nil {
+		return true
+	}
+	return *s.cfg.ExpertTextFileInline.Enabled
+}
+
+func (s *Store) ExpertTextFileInlineMaxFileBytes() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.cfg.ExpertTextFileInline.MaxFileBytes > 0 {
+		return s.cfg.ExpertTextFileInline.MaxFileBytes
+	}
+	return 3 * 1024 * 1024 // 3 MiB
+}
+
+func (s *Store) ExpertTextFileInlineAllowedExtensions() map[string]struct{} {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return extensionSet(s.cfg.ExpertTextFileInline.AllowedExtensions)
+}
+
+func extensionSet(exts []string) map[string]struct{} {
+	if len(exts) == 0 {
+		return nil
+	}
+	out := make(map[string]struct{}, len(exts))
+	for _, e := range exts {
+		e = strings.ToLower(strings.TrimSpace(e))
+		if e == "" {
+			continue
+		}
+		if !strings.HasPrefix(e, ".") {
+			e = "." + e
+		}
+		out[e] = struct{}{}
+	}
+	return out
+}
+
 func (s *Store) AutoRouteVisionEnabled() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

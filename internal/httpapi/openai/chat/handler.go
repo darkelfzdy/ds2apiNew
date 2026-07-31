@@ -22,10 +22,11 @@ const openAIGeneralMaxSize = shared.GeneralMaxSize
 var writeJSON = shared.WriteJSON
 
 type Handler struct {
-	Store       shared.ConfigReader
-	Auth        shared.AuthResolver
-	DS          shared.DeepSeekCaller
-	ChatHistory *chathistory.Store
+	Store        shared.ConfigReader
+	Auth         shared.AuthResolver
+	DS           shared.DeepSeekCaller
+	ChatHistory  *chathistory.Store
+	ContentStore files.ContentStore
 
 	leaseMu      sync.Mutex
 	streamLeases map[string]streamLease
@@ -59,7 +60,14 @@ func (h *Handler) preprocessInlineFileInputs(ctx context.Context, a *auth.Reques
 	if h == nil {
 		return nil
 	}
-	return (&files.Handler{Store: h.Store, Auth: h.Auth, DS: h.DS, ChatHistory: h.ChatHistory}).PreprocessInlineFileInputs(ctx, a, req)
+	return (&files.Handler{Store: h.Store, Auth: h.Auth, DS: h.DS, ChatHistory: h.ChatHistory, ContentStore: h.ContentStore}).PreprocessInlineFileInputs(ctx, a, req)
+}
+
+func (h *Handler) preprocessInlineTextFilesForExpert(ctx context.Context, a *auth.RequestAuth, req map[string]any) error {
+	if h == nil {
+		return nil
+	}
+	return (&files.Handler{Store: h.Store, Auth: h.Auth, DS: h.DS, ChatHistory: h.ChatHistory, ContentStore: h.ContentStore}).PreprocessInlineTextFilesForExpert(ctx, a, req)
 }
 
 func (h *Handler) toolcallFeatureMatchEnabled() bool {

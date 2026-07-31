@@ -30,6 +30,9 @@ func ValidateConfig(c Config) error {
 	if err := ValidateExpertPromptSegmentConfig(c.ExpertPromptSegment); err != nil {
 		return err
 	}
+	if err := ValidateExpertTextFileInlineConfig(c.ExpertTextFileInline); err != nil {
+		return err
+	}
 	if err := ValidateAutoRouteVisionConfig(c.AutoRouteVision); err != nil {
 		return err
 	}
@@ -131,6 +134,21 @@ func ValidateExpertPromptSegmentConfig(cfg ExpertPromptSegmentConfig) error {
 	if cfg.MaxChars != 0 {
 		if err := ValidateIntRange("expert_prompt_segment.max_chars", cfg.MaxChars, 1000, 100000000, true); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func ValidateExpertTextFileInlineConfig(cfg ExpertTextFileInlineConfig) error {
+	if cfg.MaxFileBytes != 0 {
+		if err := ValidateIntRange("expert_text_file_inline.max_file_bytes", cfg.MaxFileBytes, 1, 100<<20, true); err != nil {
+			return err
+		}
+	}
+	for i, ext := range cfg.AllowedExtensions {
+		trimmed := strings.TrimSpace(ext)
+		if trimmed == "" {
+			return fmt.Errorf("expert_text_file_inline.allowed_extensions[%d] cannot be empty", i)
 		}
 	}
 	return nil

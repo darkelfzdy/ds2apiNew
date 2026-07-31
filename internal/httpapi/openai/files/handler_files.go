@@ -20,10 +20,11 @@ import (
 const openAIUploadMaxMemory = 32 << 20
 
 type Handler struct {
-	Store       shared.ConfigReader
-	Auth        shared.AuthResolver
-	DS          shared.DeepSeekCaller
-	ChatHistory *chathistory.Store
+	Store        shared.ConfigReader
+	Auth         shared.AuthResolver
+	DS           shared.DeepSeekCaller
+	ChatHistory  *chathistory.Store
+	ContentStore ContentStore
 }
 
 type fileFetcher interface {
@@ -89,6 +90,12 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 	}
 	if result != nil && result.AccountID == "" {
 		result.AccountID = a.AccountID
+	}
+	if h.ContentStore != nil && result != nil {
+		if err := h.ContentStore.Store(result.ID, result.Filename, contentType, data); err != nil {
+			// Upload succeeded upstream; losing the local cache is non-fatal.
+			config.Logger.Warn("[files] failed to cache uploaded file content", "file_id", result.ID, "error", err)
+		}
 	}
 	shared.WriteJSON(w, http.StatusOK, buildOpenAIFileObject(result))
 }

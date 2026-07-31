@@ -417,6 +417,30 @@ Parameters: ...
 - 配置访问器：
   [internal/config/store_accessors.go](../internal/config/store_accessors.go)
 
+### 9.2 expert 模式文本文件内联（expert_text_file_inline）
+
+expert（pro）模型本身不会收到任何 `ref_file_ids` 或 inline 文件引用。为了让文本类附件仍能被专家模型读取，兼容层在 expert 请求进入 prompt 构建前，会先把常见文本格式（`.txt`、`.md`、`.csv`、代码文件等）的内容从内存缓存中读出，替换为同位置的 `{"type":"text","text":"..."}` 块。这样文件内容直接成为 `FinalPrompt` 的一部分：
+
+- 默认开启；仅对 `model_type == "expert"` 的模型生效。
+- 非 expert 模型保持原行为：文件走 `ref_file_ids` 上传引用。
+- 内联前会校验文件扩展名或 MIME 类型；非文本文件（图片、PDF 等）会被保留但 expert 模型最终仍不会收到它们。
+- 单个文件超过 `expert_text_file_inline.max_file_bytes`（默认 `3145728`，即 3 MiB）会直接拒绝请求（HTTP 413）。
+- 用户可通过 `expert_text_file_inline.allowed_extensions` 自定义扩展名白名单；提供后默认 MIME 回退会被禁用，只按扩展名判断。
+- 文件内容统一按 UTF-8 读取，非法字节替换为 `\ufffd`。
+- 内联后文本会计入 `FinalPrompt` 长度，因此超长文本文件会自然触发 `expert_prompt_segment` 分段发送。
+- 该处理在 OpenAI Chat、Responses 和 Vercel stream prepare 路径中统一执行，Vercel 续发/切换时复用已 prepared 的请求，无需再次处理。
+
+相关实现：
+
+- 文本格式判断：
+  [internal/httpapi/openai/files/text_format.go](../internal/httpapi/openai/files/text_format.go)
+- 专家模型内联处理：
+  [internal/httpapi/openai/files/expert_text_file_inline.go](../internal/httpapi/openai/files/expert_text_file_inline.go)
+- 内存文件缓存：
+  [internal/httpapi/openai/files/file_content_store.go](../internal/httpapi/openai/files/file_content_store.go)
+- 上传时缓存文件内容：
+  [internal/httpapi/openai/files/handler_files.go](../internal/httpapi/openai/files/handler_files.go)
+
 ## 10. 各协议入口的差异
 
 ### 10.1 OpenAI Chat / Responses
@@ -426,7 +450,7 @@ Parameters: ...
 - `developer` 会映射到 `system`
 - Responses `instructions` 会 prepend 为 system message
 - 普通直传时 `tools` 会注入 system prompt；`current_input_file` 触发时工具描述/schema 会拆成 `DS2API_TOOLS.txt`，system prompt 保留格式/策略规则并明确要求模型从 `DS2API_TOOLS.txt` 获取可调用工具和 schema
-- `attachments` / `input_file` / inline 文件会进入 `ref_file_ids`
+- `attachments` / `input_file` / inline 文件会进入 `ref_file_ids`；对 expert 模型，文本类文件会按 [9.2](#92-expert-模式文本文件内联expert_text_file_inline) 内联进 prompt
 - current input file 在统一 completion runtime 入口全局生效
 
 ### 10.2 Claude Messages

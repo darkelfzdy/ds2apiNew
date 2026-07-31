@@ -70,6 +70,10 @@ func (h *Handler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIInlineFileError(w, err)
 		return
 	}
+	if err := h.preprocessInlineTextFilesForExpert(r.Context(), a, req); err != nil {
+		writeOpenAIInlineFileError(w, err)
+		return
+	}
 	if rerouted {
 		promptcompat.StripImageBlocksFromRequest(req)
 	}

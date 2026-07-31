@@ -59,6 +59,22 @@
     "enabled": true,
     "max_chars": 160000
   },
+  "expert_text_file_inline": {
+    "enabled": true,
+    "max_file_bytes": 3145728,
+    "allowed_extensions": [
+      ".txt", ".md", ".markdown",
+      ".csv", ".tsv",
+      ".json", ".jsonl",
+      ".xml", ".yaml", ".yml",
+      ".ini", ".cfg", ".conf", ".properties", ".toml",
+      ".log", ".sql",
+      ".sh", ".bash", ".zsh", ".fish", ".ps1", ".bat", ".cmd",
+      ".py", ".js", ".ts", ".tsx", ".jsx",
+      ".html", ".htm", ".css",
+      ".go", ".c", ".cpp", ".h", ".java", ".kt", ".rs", ".rb", ".php", ".swift"
+    ]
+  },
   "auto_route_vision": {
     "enabled": false
   },

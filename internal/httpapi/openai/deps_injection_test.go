@@ -43,10 +43,13 @@ func (m mockOpenAIConfig) ThinkingInjectionEnabled() bool {
 	}
 	return *m.thinkingInjection
 }
-func (m mockOpenAIConfig) ThinkingInjectionPrompt() string { return m.thinkingPrompt }
-func (mockOpenAIConfig) ExpertPromptSegmentEnabled() bool  { return false }
-func (mockOpenAIConfig) ExpertPromptSegmentMaxChars() int  { return 120000 }
-func (m mockOpenAIConfig) AutoRouteVisionEnabled() bool    { return m.autoRouteVision }
+func (m mockOpenAIConfig) ThinkingInjectionPrompt() string                          { return m.thinkingPrompt }
+func (mockOpenAIConfig) ExpertPromptSegmentEnabled() bool                           { return false }
+func (mockOpenAIConfig) ExpertPromptSegmentMaxChars() int                           { return 120000 }
+func (mockOpenAIConfig) ExpertTextFileInlineEnabled() bool                          { return false }
+func (mockOpenAIConfig) ExpertTextFileInlineMaxFileBytes() int                      { return 3 * 1024 * 1024 }
+func (mockOpenAIConfig) ExpertTextFileInlineAllowedExtensions() map[string]struct{} { return nil }
+func (m mockOpenAIConfig) AutoRouteVisionEnabled() bool                             { return m.autoRouteVision }
 
 func TestNormalizeOpenAIChatRequestWithConfigInterface(t *testing.T) {
 	cfg := mockOpenAIConfig{

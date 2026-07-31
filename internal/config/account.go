@@ -41,6 +41,13 @@ func (a Account) IsMuted() bool {
 	return a.MutedUntil > float64(time.Now().Unix())
 }
 
+// IsBanned reports whether the account has been suspended by upstream
+// (USER_IS_BANNED). A banned account stays out of the pool even if an admin
+// manually re-enables it; only a successful token refresh can clear the flag.
+func (a Account) IsBanned() bool {
+	return a.Banned
+}
+
 // IsCoolingDown reports whether the account is in a local risk-control cooldown
 // after a captcha challenge. Like IsMuted this expires on its own, so the pool
 // picks the account back up without any sweeper.
@@ -53,7 +60,7 @@ func (a Account) IsCoolingDown() bool {
 
 // IsSchedulable reports whether the pool may hand this account to a request.
 func (a Account) IsSchedulable() bool {
-	return a.IsEnabled() && !a.IsMuted() && !a.IsCoolingDown()
+	return a.IsEnabled() && !a.IsMuted() && !a.IsBanned() && !a.IsCoolingDown()
 }
 
 // NormalizePoolType 规范化账号号池类型，空值视为 default。

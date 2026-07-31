@@ -55,8 +55,14 @@ func (c *Client) Login(ctx context.Context, acc config.Account) (string, error) 
 		return "", fmt.Errorf("login failed: %v", resp["msg"])
 	}
 	data, _ := resp["data"].(map[string]any)
-	if intFrom(data["biz_code"]) != 0 {
-		return "", fmt.Errorf("login failed: %v", data["biz_msg"])
+	bizCode := intFrom(data["biz_code"])
+	bizMsg, _ := data["biz_msg"].(string)
+	if bizCode != 0 {
+		if isUserBannedResponse(bizCode, bizMsg) {
+			c.persistBannedAccount(acc.Identifier(), "账户已被停用")
+			return "", fmt.Errorf("login failed: USER_IS_BANNED")
+		}
+		return "", fmt.Errorf("login failed: %v", bizMsg)
 	}
 	bizData, _ := data["biz_data"].(map[string]any)
 	user, _ := bizData["user"].(map[string]any)
@@ -70,6 +76,9 @@ func (c *Client) Login(ctx context.Context, acc config.Account) (string, error) 
 			c.persistMutedUntil(acc.Identifier(), muteUntil)
 			config.Logger.Warn("[login] account is muted", "account", acc.Identifier(), "mute_until", muteUntil)
 		}
+	}
+	if acc.Banned {
+		c.clearBannedAccount(acc.Identifier())
 	}
 	ssoID, _ := user["id"].(string)
 	loginAuth := &auth.RequestAuth{
@@ -155,6 +164,75 @@ func (c *Client) persistMutedUntil(identifier string, muteUntil float64) {
 	}); err != nil {
 		config.Logger.Error("[muted_account] failed to persist muted_until", "account", identifier, "error", err)
 	}
+}
+
+// isUserBannedResponse 判断登录响应是否表示账号被上游停用（USER_IS_BANNED）。
+func isUserBannedResponse(bizCode int, bizMsg string) bool {
+	msg := strings.ToLower(strings.TrimSpace(bizMsg))
+	return strings.Contains(msg, "user_is_banned") || bizCode == 10
+}
+
+// persistBannedAccount 持久化账号因上游 USER_IS_BANNED 而被停用的状态。
+// 与禁言不同：禁言有 MutedUntil 可自动恢复，而被上游停用需等待
+// 下次成功刷新 token 后才会解除。
+func (c *Client) persistBannedAccount(identifier string, reason string) {
+	if c == nil || c.Store == nil || strings.TrimSpace(identifier) == "" || strings.TrimSpace(reason) == "" {
+		return
+	}
+	if err := c.Store.Update(func(cfg *config.Config) error {
+		for i := range cfg.Accounts {
+			if cfg.Accounts[i].Identifier() != identifier {
+				continue
+			}
+			cfg.Accounts[i].Banned = true
+			cfg.Accounts[i].Disabled = true
+			cfg.Accounts[i].DisabledReason = reason
+			break
+		}
+		if cfg.ElasticPool.Enabled {
+			account.ReconcileElasticPool(cfg)
+		}
+		return nil
+	}); err != nil {
+		config.Logger.Error("[banned_account] failed to persist banned state", "account", identifier, "error", err)
+		return
+	}
+	if c.Auth != nil && c.Auth.Pool != nil {
+		c.Auth.Pool.Reset()
+	}
+	config.Logger.Warn("[banned_account] account disabled after USER_IS_BANNED", "account", identifier, "reason", reason)
+}
+
+// clearBannedAccount 在成功刷新 token 后解除上游停用状态。
+func (c *Client) clearBannedAccount(identifier string) {
+	if c == nil || c.Store == nil || strings.TrimSpace(identifier) == "" {
+		return
+	}
+	if err := c.Store.Update(func(cfg *config.Config) error {
+		for i := range cfg.Accounts {
+			if cfg.Accounts[i].Identifier() != identifier {
+				continue
+			}
+			if !cfg.Accounts[i].Banned {
+				return nil
+			}
+			cfg.Accounts[i].Banned = false
+			cfg.Accounts[i].Disabled = false
+			cfg.Accounts[i].DisabledReason = ""
+			break
+		}
+		if cfg.ElasticPool.Enabled {
+			account.ReconcileElasticPool(cfg)
+		}
+		return nil
+	}); err != nil {
+		config.Logger.Error("[banned_account] failed to clear banned state", "account", identifier, "error", err)
+		return
+	}
+	if c.Auth != nil && c.Auth.Pool != nil {
+		c.Auth.Pool.Reset()
+	}
+	config.Logger.Info("[banned_account] account re-enabled after successful token refresh", "account", identifier)
 }
 
 // captchaCooldown is how long an account is benched after a captcha challenge.

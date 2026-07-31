@@ -142,6 +142,8 @@
         "testStatusFailed": "Last test failed",
         "accountDisabled": "Disabled",
         "accountDisabledHint": "Account disabled manually. Will not be scheduled until re-enabled.",
+        "accountBanned": "Account suspended",
+        "accountBannedHint": "Account suspended by upstream. Will only resume scheduling after a successful token refresh.",
         "accountMuted": "Muted (auto-disabled)",
         "accountMutedHint": "Account is muted by upstream. Will auto-recover after expiry.",
         "accountMutedRecoverAt": "Est. recovery {time}",

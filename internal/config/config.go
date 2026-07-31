@@ -30,18 +30,20 @@ type Config struct {
 }
 
 type Account struct {
-	Name       string  `json:"name,omitempty"`
-	Remark     string  `json:"remark,omitempty"`
-	Email      string  `json:"email,omitempty"`
-	Mobile     string  `json:"mobile,omitempty"`
-	Password   string  `json:"password,omitempty"`
-	Token      string  `json:"token,omitempty"`
-	DeviceID   string  `json:"device_id,omitempty"`
-	ProxyID    string  `json:"proxy_id,omitempty"`
-	PoolType   string  `json:"pool_type,omitempty"`
-	Locale     string  `json:"locale,omitempty"`
-	Disabled   bool    `json:"disabled,omitempty"`
-	MutedUntil float64 `json:"muted_until,omitempty"`
+	Name           string  `json:"name,omitempty"`
+	Remark         string  `json:"remark,omitempty"`
+	Email          string  `json:"email,omitempty"`
+	Mobile         string  `json:"mobile,omitempty"`
+	Password       string  `json:"password,omitempty"`
+	Token          string  `json:"token,omitempty"`
+	DeviceID       string  `json:"device_id,omitempty"`
+	ProxyID        string  `json:"proxy_id,omitempty"`
+	PoolType       string  `json:"pool_type,omitempty"`
+	Locale         string  `json:"locale,omitempty"`
+	Disabled       bool    `json:"disabled,omitempty"`
+	DisabledReason string  `json:"disabled_reason,omitempty"`
+	Banned         bool    `json:"banned,omitempty"`
+	MutedUntil     float64 `json:"muted_until,omitempty"`
 	// CooldownUntil 是本地风控冷却到期时间（Unix 秒）。
 	// 与 MutedUntil 不同：MutedUntil 由上游下发，CooldownUntil 是我们自己
 	// 在收到验证码挑战后主动设置的——挑战意味着风控已经盯上这个账号，

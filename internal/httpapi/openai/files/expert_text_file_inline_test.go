@@ -263,6 +263,106 @@ func TestPreprocessInlineTextFilesForExpert_Disabled(t *testing.T) {
 	}
 }
 
+func TestPreprocessInlineTextFilesForExpert_TopLevelFileIDs(t *testing.T) {
+	store := &mapContentStore{data: map[string]*storedContent{
+		"file-1": {filename: "notes.txt", mimeType: "text/plain", data: []byte("top level content")},
+		"file-2": {filename: "image.png", mimeType: "image/png", data: []byte("binary")},
+	}}
+	h := &Handler{Store: expertInlineMockStore{}, ContentStore: store}
+	req := map[string]any{
+		"model": "deepseek-v4-pro",
+		"messages": []any{
+			map[string]any{"role": "user", "content": "summarize"},
+		},
+		"file_ids": []any{"file-1", "file-2"},
+	}
+	if err := h.PreprocessInlineTextFilesForExpert(context.Background(), &auth.RequestAuth{}, req); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	content := req["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	if len(content) != 2 {
+		t.Fatalf("expected 2 content parts (text + inlined file), got %d: %#v", len(content), content)
+	}
+	first := content[0].(map[string]any)
+	if first["type"] != "text" || first["text"] != "summarize" {
+		t.Fatalf("expected original text preserved, got %#v", first)
+	}
+	second := content[1].(map[string]any)
+	if second["type"] != "text" || second["text"] != "top level content" {
+		t.Fatalf("expected inlined top-level file content, got %#v", second)
+	}
+}
+
+func TestPreprocessInlineTextFilesForExpert_TopLevelRefFileIDsWithArrayContent(t *testing.T) {
+	store := &mapContentStore{data: map[string]*storedContent{
+		"file-1": {filename: "notes.txt", mimeType: "text/plain", data: []byte("ref content")},
+	}}
+	h := &Handler{Store: expertInlineMockStore{}, ContentStore: store}
+	req := map[string]any{
+		"model": "deepseek-v4-pro",
+		"messages": []any{
+			map[string]any{
+				"role":    "user",
+				"content": []any{map[string]any{"type": "text", "text": "read this"}},
+			},
+		},
+		"ref_file_ids": []string{"file-1"},
+	}
+	if err := h.PreprocessInlineTextFilesForExpert(context.Background(), &auth.RequestAuth{}, req); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	content := req["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	if len(content) != 2 {
+		t.Fatalf("expected 2 content parts, got %d: %#v", len(content), content)
+	}
+	if got := content[1].(map[string]any)["text"]; got != "ref content" {
+		t.Fatalf("expected inlined ref content, got %#v", got)
+	}
+}
+
+func TestPreprocessInlineTextFilesForExpert_TopLevelFileIDsMissing(t *testing.T) {
+	h := &Handler{Store: expertInlineMockStore{}, ContentStore: &mapContentStore{}}
+	req := map[string]any{
+		"model": "deepseek-v4-pro",
+		"messages": []any{
+			map[string]any{"role": "user", "content": "summarize"},
+		},
+		"file_ids": []any{"missing"},
+	}
+	err := h.PreprocessInlineTextFilesForExpert(context.Background(), &auth.RequestAuth{}, req)
+	if err == nil {
+		t.Fatalf("expected error for missing file")
+	}
+	if !strings.Contains(err.Error(), "unavailable") {
+		t.Errorf("expected unavailable error, got %v", err)
+	}
+}
+
+func TestPreprocessInlineTextFilesForExpert_TopLevelFileIDsNotAppliedToToolMessages(t *testing.T) {
+	store := &mapContentStore{data: map[string]*storedContent{
+		"file-1": {filename: "notes.txt", mimeType: "text/plain", data: []byte("content")},
+	}}
+	h := &Handler{Store: expertInlineMockStore{}, ContentStore: store}
+	req := map[string]any{
+		"model": "deepseek-v4-pro",
+		"messages": []any{
+			map[string]any{"role": "system", "content": "instructions"},
+			map[string]any{"role": "assistant", "content": "thinking"},
+			map[string]any{"role": "user", "content": "last user"},
+		},
+		"file_ids": []any{"file-1"},
+	}
+	if err := h.PreprocessInlineTextFilesForExpert(context.Background(), &auth.RequestAuth{}, req); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	messages := req["messages"].([]any)
+	last := messages[2].(map[string]any)
+	content := last["content"].([]any)
+	if len(content) != 2 {
+		t.Fatalf("expected inlined content on last user message, got %d: %#v", len(content), content)
+	}
+}
+
 func TestPreprocessInlineTextFilesForExpert_InvalidUTF8(t *testing.T) {
 	store := &mapContentStore{data: map[string]*storedContent{
 		"file-1": {filename: "notes.txt", mimeType: "text/plain", data: []byte("hello \xff world")},

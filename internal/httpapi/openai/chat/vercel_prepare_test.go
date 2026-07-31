@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -692,5 +693,282 @@ func TestHandleVercelStreamPrepareInlinesTextFilesForExpert(t *testing.T) {
 	refIDs, _ := payload["ref_file_ids"].([]any)
 	if len(refIDs) != 0 {
 		t.Fatalf("expected expert payload ref_file_ids empty, got %#v", refIDs)
+	}
+}
+
+type vercelSegmentDSStub struct {
+	fireCalls   []map[string]any
+	callPayload map[string]any
+	createCalls int
+}
+
+func (m *vercelSegmentDSStub) CreateSession(_ context.Context, _ *auth.RequestAuth, _ int) (string, error) {
+	m.createCalls++
+	return fmt.Sprintf("session-%d", m.createCalls), nil
+}
+
+func (m *vercelSegmentDSStub) GetPow(_ context.Context, _ *auth.RequestAuth, _ int) (string, error) {
+	return "pow", nil
+}
+
+func (m *vercelSegmentDSStub) UploadFile(_ context.Context, _ *auth.RequestAuth, _ dsclient.UploadFileRequest, _ int) (*dsclient.UploadFileResult, error) {
+	return &dsclient.UploadFileResult{ID: "file-uploaded", Filename: "f.txt", Bytes: 1, Status: "uploaded"}, nil
+}
+
+func (m *vercelSegmentDSStub) CallCompletion(_ context.Context, _ *auth.RequestAuth, payload map[string]any, _ string, _ int) (*http.Response, error) {
+	m.callPayload = payload
+	return makeOpenAISSEHTTPResponse(
+		`data: {"p":"response/content","v":"ok"}`,
+		`data: [DONE]`,
+	), nil
+}
+
+func (m *vercelSegmentDSStub) StopStream(_ context.Context, _ *auth.RequestAuth, _ string, _ int) error {
+	return nil
+}
+
+func (m *vercelSegmentDSStub) FireCompletionAndStop(_ context.Context, _ *auth.RequestAuth, payload map[string]any, _ string) (int, error) {
+	m.fireCalls = append(m.fireCalls, payload)
+	return 42, nil
+}
+
+func (m *vercelSegmentDSStub) DeleteSessionForToken(_ context.Context, _ string, _ string) (*dsclient.DeleteSessionResult, error) {
+	return &dsclient.DeleteSessionResult{Success: true}, nil
+}
+
+func (m *vercelSegmentDSStub) DeleteAllSessionsForToken(_ context.Context, _ string) error {
+	return nil
+}
+
+func bigExpertTextFileRequest(t *testing.T, contentStore *files.MemoryContentStore) string {
+	t.Helper()
+	bigText := strings.Repeat("这是很长的一段文件内容，用于模拟拆分上传的大文件。", 20000)
+	if err := contentStore.Store("file-big-1", "big.txt", "text/plain", []byte(bigText)); err != nil {
+		t.Fatalf("store failed: %v", err)
+	}
+	reqBody, err := json.Marshal(map[string]any{
+		"model": "deepseek-v4-pro",
+		"messages": []any{
+			map[string]any{
+				"role": "user",
+				"content": []any{
+					map[string]any{"type": "text", "text": "read this"},
+					map[string]any{"type": "input_file", "file_id": "file-big-1"},
+				},
+			},
+		},
+		"stream": true,
+	})
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+	return string(reqBody)
+}
+
+// TestHandleVercelStreamPrepareSegmentsExpertPrompt verifies that oversized
+// expert prompts (e.g. after text file inlining) are split into segments on the
+// Vercel prepare path: all but the last segment are fired-and-stopped in Go and
+// only the final segment payload is handed to the Node stream layer.
+func TestHandleVercelStreamPrepareSegmentsExpertPrompt(t *testing.T) {
+	t.Setenv("VERCEL", "1")
+	t.Setenv("DS2API_VERCEL_INTERNAL_SECRET", "stream-secret")
+	t.Setenv("DS2API_CONFIG_JSON", `{"keys":["k"],"accounts":[{"email":"a@b.c","password":"p"}]}`)
+	store := config.LoadStore()
+
+	contentStore := files.NewMemoryContentStore(100<<20, time.Hour)
+	ds := &vercelSegmentDSStub{}
+	h := &Handler{
+		Store:        store,
+		Auth:         streamStatusAuthStub{},
+		DS:           ds,
+		ContentStore: contentStore,
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions?__stream_prepare=1", strings.NewReader(bigExpertTextFileRequest(t, contentStore)))
+	req.Header.Set("Authorization", "Bearer direct-token")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Ds2-Internal-Token", "stream-secret")
+	rec := httptest.NewRecorder()
+
+	h.handleVercelStreamPrepare(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(ds.fireCalls) == 0 {
+		t.Fatalf("expected segmented expert prompt to fire-and-stop earlier segments")
+	}
+	var body map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	payload, _ := body["payload"].(map[string]any)
+	promptText, _ := payload["prompt"].(string)
+	if len([]rune(promptText)) > store.ExpertPromptSegmentMaxChars() {
+		t.Fatalf("expected final segment payload prompt within max_chars, got %d runes", len([]rune(promptText)))
+	}
+	if parentID, _ := payload["parent_message_id"].(float64); parentID != 42 {
+		t.Fatalf("expected final segment payload parent_message_id=42, got %#v", payload["parent_message_id"])
+	}
+	if len(ds.fireCalls) > 1 {
+		for i, fire := range ds.fireCalls {
+			if i == 0 {
+				continue
+			}
+			if got := payloadParentMessageID(fire); got != 42 {
+				t.Fatalf("expected non-first fired segments to chain parent_message_id=42, got %#v", fire["parent_message_id"])
+			}
+		}
+	}
+}
+
+func payloadParentMessageID(payload map[string]any) float64 {
+	switch v := payload["parent_message_id"].(type) {
+	case float64:
+		return v
+	case int:
+		return float64(v)
+	case int64:
+		return float64(v)
+	default:
+		return 0
+	}
+}
+
+// TestHandleVercelStreamSwitchSegmentsExpertPrompt verifies that the Vercel
+// switch path re-segments the stored expert request on the new account and
+// returns the final segment payload with a fresh session.
+func TestHandleVercelStreamSwitchSegmentsExpertPrompt(t *testing.T) {
+	t.Setenv("VERCEL", "1")
+	t.Setenv("DS2API_VERCEL_INTERNAL_SECRET", "stream-secret")
+	t.Setenv("DS2API_CONFIG_JSON", `{
+		"keys":["managed-key"],
+		"accounts":[
+			{"email":"acc1@test.com","password":"pwd"},
+			{"email":"acc2@test.com","password":"pwd"}
+		]
+	}`)
+	store := config.LoadStore()
+	resolver := auth.NewResolver(store, account.NewPool(store), func(_ context.Context, acc config.Account) (string, error) {
+		return "token-" + acc.Identifier(), nil
+	})
+	authReq := httptest.NewRequest(http.MethodPost, "/", nil)
+	authReq.Header.Set("Authorization", "Bearer managed-key")
+	a, err := resolver.Determine(authReq)
+	if err != nil {
+		t.Fatalf("determine failed: %v", err)
+	}
+	defer resolver.Release(a)
+
+	contentStore := files.NewMemoryContentStore(100<<20, time.Hour)
+	prepDS := &vercelSegmentDSStub{}
+	h := &Handler{
+		Store:        store,
+		Auth:         resolver,
+		DS:           prepDS,
+		ContentStore: contentStore,
+	}
+
+	prep := httptest.NewRequest(http.MethodPost, "/v1/chat/completions?__stream_prepare=1", strings.NewReader(bigExpertTextFileRequest(t, contentStore)))
+	prep.Header.Set("Authorization", "Bearer managed-key")
+	prep.Header.Set("Content-Type", "application/json")
+	prep.Header.Set("X-Ds2-Internal-Token", "stream-secret")
+	rec := httptest.NewRecorder()
+	h.handleVercelStreamPrepare(rec, prep)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected prepare 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var prepBody map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&prepBody); err != nil {
+		t.Fatalf("prepare decode failed: %v", err)
+	}
+	leaseID, _ := prepBody["lease_id"].(string)
+	if leaseID == "" {
+		t.Fatalf("expected lease_id in prepare response")
+	}
+	prepareFireCount := len(prepDS.fireCalls)
+	if prepareFireCount == 0 {
+		t.Fatalf("expected segmented prepare to fire earlier segments")
+	}
+
+	switchDS := &vercelSegmentDSStub{}
+	h.DS = switchDS
+	switchReq := httptest.NewRequest(http.MethodPost, "/v1/chat/completions?__stream_switch=1", strings.NewReader(`{"lease_id":"`+leaseID+`"}`))
+	switchReq.Header.Set("X-Ds2-Internal-Token", "stream-secret")
+	rec2 := httptest.NewRecorder()
+	h.handleVercelStreamSwitch(rec2, switchReq)
+
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("expected switch 200, got %d body=%s", rec2.Code, rec2.Body.String())
+	}
+	if len(switchDS.fireCalls) != prepareFireCount {
+		t.Fatalf("expected switch to re-fire %d segments on the new account, got %d", prepareFireCount, len(switchDS.fireCalls))
+	}
+	var switchBody map[string]any
+	if err := json.NewDecoder(rec2.Body).Decode(&switchBody); err != nil {
+		t.Fatalf("switch decode failed: %v", err)
+	}
+	preparedToken, _ := prepBody["deepseek_token"].(string)
+	switchedToken, _ := switchBody["deepseek_token"].(string)
+	if switchedToken == "" || switchedToken == preparedToken {
+		t.Fatalf("expected switch to move to a different account, prepared=%q switched=%q", preparedToken, switchedToken)
+	}
+	if switchedToken != "token-acc1@test.com" && switchedToken != "token-acc2@test.com" {
+		t.Fatalf("unexpected switched account token %q", switchedToken)
+	}
+	payload, _ := switchBody["payload"].(map[string]any)
+	promptText, _ := payload["prompt"].(string)
+	if len([]rune(promptText)) > store.ExpertPromptSegmentMaxChars() {
+		t.Fatalf("expected switched final segment prompt within max_chars, got %d runes", len([]rune(promptText)))
+	}
+	if parentID, _ := payload["parent_message_id"].(float64); parentID != 42 {
+		t.Fatalf("expected switched final segment parent_message_id=42, got %#v", payload["parent_message_id"])
+	}
+}
+
+func TestHandleVercelStreamPrepareInlinesTopLevelFileIDsForExpert(t *testing.T) {
+	t.Setenv("VERCEL", "1")
+	t.Setenv("DS2API_VERCEL_INTERNAL_SECRET", "stream-secret")
+
+	store := files.NewMemoryContentStore(100<<20, time.Hour)
+	if err := store.Store("file-top-1", "notes.txt", "text/plain", []byte("top level inlined content")); err != nil {
+		t.Fatalf("store failed: %v", err)
+	}
+
+	enabled := true
+	h := &Handler{
+		Store: mockOpenAIConfig{
+			expertTextInlineEnabled: &enabled,
+		},
+		Auth:         streamStatusAuthStub{},
+		DS:           &inlineUploadDSStub{},
+		ContentStore: store,
+	}
+
+	reqBody, _ := json.Marshal(map[string]any{
+		"model": "deepseek-v4-pro",
+		"messages": []any{
+			map[string]any{"role": "user", "content": "summarize"},
+		},
+		"file_ids": []any{"file-top-1"},
+		"stream":   true,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions?__stream_prepare=1", strings.NewReader(string(reqBody)))
+	req.Header.Set("Authorization", "Bearer direct-token")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Ds2-Internal-Token", "stream-secret")
+	rec := httptest.NewRecorder()
+
+	h.handleVercelStreamPrepare(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	finalPrompt, _ := body["final_prompt"].(string)
+	if !strings.Contains(finalPrompt, "top level inlined content") {
+		t.Fatalf("expected final_prompt to contain top-level file content, got %q", finalPrompt)
 	}
 }

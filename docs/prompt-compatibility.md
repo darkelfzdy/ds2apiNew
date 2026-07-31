@@ -403,6 +403,7 @@ Parameters: ...
 - 切分算法只按 rune 字数硬切，保证每段 rune 数不超过 `max_chars`，不会因为短 role 标记文本单独形成一段。
 - 账号切换重试时也会在新 session 上重新走分段发送，保证切换后仍完整提交所有段。
 - 分段发送返回的 `StartResult` 与 `StartCompletion` 完全一致，下游 `ExecuteNonStreamStartedWithRetry` / `ExecuteStreamWithRetry` 无缝接入。
+- Vercel stream 链路（`__stream_prepare` / `__stream_switch`）同样接入分段：prepare 在 Go 侧先对前 N-1 段执行 `FireCompletionAndStop`，只把最后一段的 payload 交给 Node 层直连 DeepSeek；账号切换时会在新 session 上重新分段。
 
 相关实现：
 
@@ -428,7 +429,9 @@ expert（pro）模型本身不会收到任何 `ref_file_ids` 或 inline 文件�
 - 用户可通过 `expert_text_file_inline.allowed_extensions` 自定义扩展名白名单；提供后默认 MIME 回退会被禁用，只按扩展名判断。
 - 文件内容统一按 UTF-8 读取，非法字节替换为 `\ufffd`。
 - 内联后文本会计入 `FinalPrompt` 长度，因此超长文本文件会自然触发 `expert_prompt_segment` 分段发送。
+- 除 `messages`/`input`/`attachments` 中的 `input_file` 引用外，请求顶层 `file_ids` / `ref_file_ids` 中的文本文件同样会被内联到最后一个 user 消息（非文本引用仍会被 expert payload 丢弃）。
 - 该处理在 OpenAI Chat、Responses 和 Vercel stream prepare 路径中统一执行，Vercel 续发/切换时复用已 prepared 的请求，无需再次处理。
+- 注意：`MemoryContentStore` 是进程内内存缓存（默认 30 分钟 TTL）。在 Vercel 上文件上传（`POST /v1/files`）与后续 chat prepare 可能落到不同的 Go 实例，此时 prepare 会因缓存未命中返回 400 `text file content unavailable`。该限制在单实例自部署下不存在；如需多实例共享，可基于 `files.ContentStore` 接口自行实现共享存储（如 Redis）。
 
 相关实现：
 

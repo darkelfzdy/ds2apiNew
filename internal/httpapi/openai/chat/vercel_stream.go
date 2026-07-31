@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"ds2api/internal/auth"
+	"ds2api/internal/completionruntime"
 	"ds2api/internal/config"
 	dsprotocol "ds2api/internal/deepseek/protocol"
 	"ds2api/internal/httpapi/openai/history"
@@ -93,18 +94,12 @@ func (h *Handler) handleVercelStreamPrepare(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	sessionID, err := h.DS.CreateSession(r.Context(), a, 3)
-	if err != nil {
-		if a.UseConfigToken {
-			writeOpenAIError(w, http.StatusUnauthorized, "Account token is invalid. Please re-login the account in admin.")
-		} else {
-			writeOpenAIError(w, http.StatusUnauthorized, "Invalid token. If this should be a DS2API key, add it to config.keys first.")
-		}
-		return
-	}
-	powHeader, err := h.DS.GetPow(r.Context(), a, 3)
-	if err != nil {
-		writeOpenAIError(w, http.StatusUnauthorized, "Failed to get PoW (invalid token or unknown error).")
+	sessionID, powHeader, payload, outErr := completionruntime.PrepareCompletionPayload(r.Context(), h.DS, a, stdReq, completionruntime.Options{
+		CurrentInputFile:    h.Store,
+		ExpertPromptSegment: h.Store,
+	}, 3)
+	if outErr != nil {
+		writeOpenAIError(w, outErr.Status, outErr.Message)
 		return
 	}
 	if strings.TrimSpace(a.DeepSeekToken) == "" {
@@ -112,7 +107,6 @@ func (h *Handler) handleVercelStreamPrepare(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	payload := stdReq.CompletionPayload(sessionID)
 	leaseID := h.holdStreamLease(a, stdReq, sessionID)
 	if leaseID == "" {
 		writeOpenAIError(w, http.StatusInternalServerError, "failed to create stream lease")
@@ -276,14 +270,12 @@ func (h *Handler) handleVercelStreamSwitch(w http.ResponseWriter, r *http.Reques
 			return
 		}
 	}
-	sessionID, err := h.DS.CreateSession(r.Context(), a, 3)
-	if err != nil {
-		writeOpenAIError(w, http.StatusUnauthorized, "Account token is invalid. Please re-login the account in admin.")
-		return
-	}
-	powHeader, err := h.DS.GetPow(r.Context(), a, 3)
-	if err != nil {
-		writeOpenAIError(w, http.StatusUnauthorized, "Failed to get PoW (invalid token or unknown error).")
+	sessionID, powHeader, payload, outErr := completionruntime.PrepareCompletionPayload(r.Context(), h.DS, a, stdReq, completionruntime.Options{
+		CurrentInputFile:    h.Store,
+		ExpertPromptSegment: h.Store,
+	}, 3)
+	if outErr != nil {
+		writeOpenAIError(w, outErr.Status, outErr.Message)
 		return
 	}
 	if strings.TrimSpace(a.DeepSeekToken) == "" {
@@ -301,7 +293,7 @@ func (h *Handler) handleVercelStreamSwitch(w http.ResponseWriter, r *http.Reques
 		"tool_names":       stdReq.ToolNames,
 		"deepseek_token":   a.DeepSeekToken,
 		"pow_header":       powHeader,
-		"payload":          stdReq.CompletionPayload(sessionID),
+		"payload":          payload,
 		"base_headers":     dsprotocol.BaseHeadersFor(a.Account.Locale),
 	})
 }

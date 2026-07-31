@@ -57,6 +57,42 @@ func StartCompletion(ctx context.Context, ds DeepSeekCaller, a *auth.RequestAuth
 	return startCompletionOnce(ctx, ds, a, stdReq, opts)
 }
 
+// PrepareCompletionPayload builds the session-aware completion payload for a
+// request without calling the completion endpoint itself. Oversized expert
+// prompts are split into segments first (all but the last are sent via
+// FireCompletionAndStop), so the caller can stream the returned final payload
+// directly. This is the payload-side equivalent of StartCompletion for
+// surfaces that stream upstream responses themselves (e.g. the Vercel Node
+// stream layer). On success the caller must stream the returned payload with
+// the returned PoW on the same account and session.
+func PrepareCompletionPayload(ctx context.Context, ds DeepSeekCaller, a *auth.RequestAuth, stdReq promptcompat.StandardRequest, opts Options, maxAttempts int) (sessionID, pow string, payload map[string]any, outErr *assistantturn.OutputError) {
+	if maxAttempts <= 0 {
+		maxAttempts = 3
+	}
+	var prepErr *assistantturn.OutputError
+	stdReq, prepErr = prepareCurrentInputFile(ctx, ds, a, stdReq, opts)
+	if prepErr != nil {
+		return "", "", nil, prepErr
+	}
+	var err error
+	sessionID, err = ds.CreateSession(ctx, a, maxAttempts)
+	if err != nil {
+		return "", "", nil, authOutputError(a)
+	}
+	if segments := shouldSegmentExpertPrompt(stdReq, opts); len(segments) > 1 {
+		finalPow, finalPayload, segErr := fireSegmentPayloads(ctx, ds, a, stdReq, sessionID, segments, maxAttempts)
+		if segErr != nil {
+			return sessionID, "", nil, segErr
+		}
+		return sessionID, finalPow, finalPayload, nil
+	}
+	pow, err = ds.GetPow(ctx, a, maxAttempts)
+	if err != nil {
+		return sessionID, "", nil, &assistantturn.OutputError{Status: http.StatusUnauthorized, Message: "Failed to get PoW (invalid token or unknown error).", Code: "error"}
+	}
+	return sessionID, pow, stdReq.CompletionPayload(sessionID), nil
+}
+
 func startCompletionOnce(ctx context.Context, ds DeepSeekCaller, a *auth.RequestAuth, stdReq promptcompat.StandardRequest, opts Options) (StartResult, *assistantturn.OutputError) {
 	maxAttempts := opts.MaxAttempts
 	if maxAttempts <= 0 {

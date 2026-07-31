@@ -59,7 +59,137 @@ func (h *Handler) PreprocessInlineTextFilesForExpert(ctx context.Context, a *aut
 			req[key] = updated
 		}
 	}
+	// Top-level ref_file_ids/file_ids carry request-wide file references
+	// (OpenAI-compatible clients, including the admin tester, send attachments
+	// this way). The expert completion payload drops ref_file_ids, so any text
+	// files referenced here must be inlined into the last user message as well.
+	// Non-text references are left untouched: they are dropped by payload
+	// assembly anyway.
+	if err := state.inlineTopLevelRefs(req); err != nil {
+		return err
+	}
 	return nil
+}
+
+// inlineTopLevelRefs appends the content of text files referenced by top-level
+// ref_file_ids/file_ids to the last user message, mirroring the inlining done
+// for input_file blocks. Files not cached locally produce an error so the
+// caller learns that the content cannot be forwarded to the expert model.
+func (s *expertTextInlineState) inlineTopLevelRefs(req map[string]any) error {
+	if s.store == nil {
+		return nil
+	}
+	ids := collectTopLevelFileIDs(req)
+	if len(ids) == 0 {
+		return nil
+	}
+	userIdx := lastUserMessageIndex(req)
+	if userIdx < 0 {
+		return nil
+	}
+	messages, _ := req["messages"].([]any)
+	msg, _ := messages[userIdx].(map[string]any)
+	if msg == nil {
+		return nil
+	}
+	blocks := normalizeContentBlocks(msg["content"])
+	appended := 0
+	for _, fileID := range ids {
+		filename, mimeType, data, err := s.store.Read(fileID)
+		if err != nil {
+			if err == ErrFileTooLarge {
+				return &inlineFileUploadError{
+					status:  http.StatusRequestEntityTooLarge,
+					message: fmt.Sprintf("text file %q exceeds max inline size (%d bytes)", fileID, s.maxFileBytes),
+					err:     err,
+				}
+			}
+			return &inlineFileUploadError{
+				status:  http.StatusBadRequest,
+				message: fmt.Sprintf("text file content unavailable for %q", fileID),
+				err:     err,
+			}
+		}
+		if !IsTextFile(filename, mimeType, s.allowedExts) {
+			continue
+		}
+		if err := s.checkSize(len(data), filename); err != nil {
+			return err
+		}
+		blocks = append(blocks, textBlock(data))
+		appended++
+	}
+	if appended == 0 {
+		return nil
+	}
+	msg["content"] = blocks
+	return nil
+}
+
+func collectTopLevelFileIDs(req map[string]any) []string {
+	var out []string
+	seen := map[string]struct{}{}
+	for _, key := range []string{"ref_file_ids", "file_ids"} {
+		raw, ok := req[key]
+		if !ok {
+			continue
+		}
+		var items []any
+		switch x := raw.(type) {
+		case []any:
+			items = x
+		case []string:
+			items = make([]any, len(x))
+			for i, item := range x {
+				items[i] = item
+			}
+		default:
+			continue
+		}
+		for _, item := range items {
+			fileID := strings.TrimSpace(shared.AsString(item))
+			if fileID == "" {
+				continue
+			}
+			key := strings.ToLower(fileID)
+			if _, dup := seen[key]; dup {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, fileID)
+		}
+	}
+	return out
+}
+
+func lastUserMessageIndex(req map[string]any) int {
+	messages, ok := req["messages"].([]any)
+	if !ok {
+		return -1
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg, ok := messages[i].(map[string]any)
+		if !ok {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(shared.AsString(msg["role"])), "user") {
+			return i
+		}
+	}
+	return -1
+}
+
+func normalizeContentBlocks(content any) []any {
+	if raw, ok := content.([]any); ok {
+		out := make([]any, 0, len(raw)+4)
+		out = append(out, raw...)
+		return out
+	}
+	text := strings.TrimSpace(shared.AsString(content))
+	if text == "" {
+		return nil
+	}
+	return []any{map[string]any{"type": "text", "text": text}}
 }
 
 type expertTextInlineState struct {

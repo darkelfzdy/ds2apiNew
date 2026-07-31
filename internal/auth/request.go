@@ -260,6 +260,43 @@ func (r *Resolver) SetAccountMutedUntil(a *RequestAuth, muteUntil float64) {
 	config.Logger.Info("[muted_account] account muted until", "account", identifier, "mute_until", muteUntil)
 }
 
+// SetAccountBanned 将账号标记为被上游停用（USER_IS_BANNED）。
+// 手动启用或启用全部账号不会解除该状态；只有成功刷新 token 后才会在 Login 中清除。
+func (r *Resolver) SetAccountBanned(a *RequestAuth, reason string) {
+	if !a.UseConfigToken || a.AccountID == "" {
+		return
+	}
+	if strings.TrimSpace(reason) == "" {
+		reason = "账户已被停用"
+	}
+	identifier := a.AccountID
+	if err := r.Store.Update(func(c *config.Config) error {
+		for i := range c.Accounts {
+			if c.Accounts[i].Identifier() != identifier {
+				continue
+			}
+			c.Accounts[i].Banned = true
+			c.Accounts[i].Disabled = true
+			c.Accounts[i].DisabledReason = reason
+			break
+		}
+		if c.ElasticPool.Enabled {
+			account.ReconcileElasticPool(c)
+		}
+		return nil
+	}); err != nil {
+		config.Logger.Error("[banned_account] failed to persist banned state", "account", identifier, "error", err)
+		return
+	}
+	a.Account.Banned = true
+	a.Account.Disabled = true
+	a.Account.DisabledReason = reason
+	if r.Pool != nil {
+		r.Pool.Reset()
+	}
+	config.Logger.Warn("[banned_account] account disabled after USER_IS_BANNED", "account", identifier, "reason", reason)
+}
+
 func (r *Resolver) SwitchAccount(ctx context.Context, a *RequestAuth) bool {
 	if !a.UseConfigToken {
 		return false

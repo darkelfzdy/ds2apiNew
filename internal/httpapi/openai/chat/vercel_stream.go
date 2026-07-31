@@ -59,6 +59,10 @@ func (h *Handler) handleVercelStreamPrepare(w http.ResponseWriter, r *http.Reque
 		writeOpenAIInlineFileError(w, err)
 		return
 	}
+	if err := h.preprocessInlineTextFilesForExpert(r.Context(), a, req); err != nil {
+		writeOpenAIInlineFileError(w, err)
+		return
+	}
 	if rerouted {
 		promptcompat.StripImageBlocksFromRequest(req)
 	}
@@ -238,11 +242,21 @@ func (h *Handler) handleVercelStreamSwitch(w http.ResponseWriter, r *http.Reques
 	a := lease.Auth
 	disable, _ := req["disable"].(bool)
 	mutedUntil, _ := req["mute_until"].(float64)
+	banned, _ := req["banned"].(bool)
+	bannedReason, _ := req["banned_reason"].(string)
 	if mutedUntil > 0 && a.UseConfigToken {
 		h.Auth.SetAccountMutedUntil(a, mutedUntil)
 	}
+	if banned && a.UseConfigToken {
+		if strings.TrimSpace(bannedReason) == "" {
+			bannedReason = "账户已被停用"
+		}
+		h.Auth.SetAccountBanned(a, bannedReason)
+	}
 	if !a.UseConfigToken || !a.SwitchAccount(r.Context()) {
-		if mutedUntil > 0 {
+		if banned {
+			writeOpenAIErrorWithCode(w, http.StatusForbidden, "Account is banned by upstream.", "account_banned")
+		} else if mutedUntil > 0 {
 			writeOpenAIErrorWithCode(w, http.StatusForbidden, "Account is muted by upstream.", "account_muted")
 		} else if disable {
 			writeOpenAIErrorWithCode(w, http.StatusServiceUnavailable, "Upstream service is unavailable and returned no output.", "upstream_unavailable")

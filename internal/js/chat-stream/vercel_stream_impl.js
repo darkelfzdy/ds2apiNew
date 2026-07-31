@@ -164,10 +164,31 @@ async function handleVercelStream(req, res, rawBody, payload) {
       return;
     }
 
-    // 当 DeepSeek 返回封号 JSON（HTTP 200 + JSON body）时，持久化 mute_until 并切换账号。
-    const detection = await detectMutedResponse(completionRes);
+    // 当 DeepSeek 返回封号/停用 JSON（HTTP 200 + JSON body）时，持久化状态并切换账号。
+    const detection = await detectMutedOrBannedResponse(completionRes);
     if (detection.response) {
       completionRes = detection.response;
+    }
+    if (detection.banned) {
+      const switched = await fetchStreamSwitch(req, leaseID, { banned: true, banned_reason: '账户已被停用' });
+      if (switched.ok && switched.body && switched.body.payload && typeof switched.body.payload === 'object') {
+        completionPayload = switched.body.payload;
+        deepseekToken = asString(switched.body.deepseek_token) || deepseekToken;
+        currentPowHeader = asString(switched.body.pow_header) || currentPowHeader;
+        activeDeepSeekSessionID = asString(switched.body.session_id) || activeDeepSeekSessionID;
+        updateBaseHeaders(switched.body);
+        completionRes = await fetchCompletion(completionPayload);
+        if (completionRes === null) {
+          return;
+        }
+        if (clientClosed) {
+          return;
+        }
+      } else {
+        await releaseLease();
+        writeOpenAIErrorWithCode(res, 403, 'Account is banned by upstream.', 'account_banned');
+        return;
+      }
     }
     if (detection.mutedUntil > 0) {
       const switched = await fetchStreamSwitch(req, leaseID, { mute_until: detection.mutedUntil });
@@ -760,14 +781,15 @@ function sendFailedChunk(res, status, message, code) {
   }
 }
 
-// 检测 DeepSeek 是否返回了封号 JSON 响应（HTTP 200 但 body 是 JSON 而非 SSE）。
-// 与 Go 侧 detectMutedCompletion 对齐：先 peek 第一个字节，只有 JSON 才读取全部 body。
-// 返回 { mutedUntil, response }：
-//   - mutedUntil > 0 时表示检测到封号，response 为 null；
-//   - mutedUntil === 0 时，response 为可能经过恢复的 Response（SSE body 未被消耗）。
-async function detectMutedResponse(res) {
+// 检测 DeepSeek 是否返回了封号/停用 JSON 响应（HTTP 200 但 body 是 JSON 而非 SSE）。
+// 与 Go 侧 detectMutedCompletion / isUserBannedResponse 对齐：先 peek 第一个字节，只有 JSON 才读取全部 body。
+// 返回 { mutedUntil, banned, response }：
+//   - mutedUntil > 0 时表示检测到禁言，response 为 null；
+//   - banned 为 true 时表示检测到 USER_IS_BANNED，response 为 null；
+//   - 均未检测到时，response 为可能经过恢复的 Response（SSE body 未被消耗）。
+async function detectMutedOrBannedResponse(res) {
   if (!res || !res.ok || !res.body) {
-    return { mutedUntil: 0, response: res };
+    return { mutedUntil: 0, banned: false, response: res };
   }
   const reader = res.body.getReader();
   let firstChunk;
@@ -775,12 +797,12 @@ async function detectMutedResponse(res) {
     const result = await reader.read();
     if (result.done || !result.value || result.value.length === 0) {
       reader.releaseLock();
-      return { mutedUntil: 0, response: res };
+      return { mutedUntil: 0, banned: false, response: res };
     }
     firstChunk = result.value;
   } catch (_err) {
     try { reader.releaseLock(); } catch (_e) {}
-    return { mutedUntil: 0, response: res };
+    return { mutedUntil: 0, banned: false, response: res };
   }
   if (firstChunk[0] !== 0x7b) { // '{'
     const newBody = new ReadableStream({
@@ -797,7 +819,7 @@ async function detectMutedResponse(res) {
         pump();
       },
     });
-    return { mutedUntil: 0, response: new Response(newBody, res) };
+    return { mutedUntil: 0, banned: false, response: new Response(newBody, res) };
   }
   const chunks = [firstChunk];
   while (true) {
@@ -807,10 +829,25 @@ async function detectMutedResponse(res) {
   }
   try {
     const data = JSON.parse(Buffer.concat(chunks).toString('utf-8'));
-    return { mutedUntil: extractMuteUntil(data), response: null };
+    return { mutedUntil: extractMuteUntil(data), banned: isBannedJSONResponse(data), response: null };
   } catch (_err) {
-    return { mutedUntil: 0, response: null };
+    return { mutedUntil: 0, banned: false, response: null };
   }
+}
+
+// 判断 DeepSeek JSON 响应是否表示 USER_IS_BANNED。
+// 匹配规则与 Go 侧 isUserBannedResponse 对齐：data.biz_code == 10 或 data.biz_msg 包含 user_is_banned。
+function isBannedJSONResponse(data) {
+  if (!data || typeof data !== 'object') {
+    return false;
+  }
+  const d = data.data;
+  if (!d || typeof d !== 'object') {
+    return false;
+  }
+  const bizMsg = asString(d.biz_msg).toLowerCase();
+  const bizCode = Number(d.biz_code) || 0;
+  return bizCode === 10 || bizMsg.includes('user_is_banned');
 }
 
 // 从 DeepSeek 响应中解析 mute_until。

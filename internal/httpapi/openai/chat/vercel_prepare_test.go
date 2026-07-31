@@ -13,6 +13,7 @@ import (
 	"ds2api/internal/auth"
 	"ds2api/internal/config"
 	dsclient "ds2api/internal/deepseek/client"
+	"ds2api/internal/httpapi/openai/files"
 	"ds2api/internal/promptcompat"
 )
 
@@ -283,6 +284,8 @@ func (a *vercelReleaseAuthStub) Release(_ *auth.RequestAuth) {
 func (a *vercelReleaseAuthStub) ToolsEnabledForRequest(_ *http.Request) bool { return true }
 
 func (a *vercelReleaseAuthStub) SetAccountMutedUntil(_ *auth.RequestAuth, _ float64) {}
+
+func (a *vercelReleaseAuthStub) SetAccountBanned(_ *auth.RequestAuth, _ string) {}
 
 func TestHandleVercelStreamReleaseTriggersAutoDelete(t *testing.T) {
 	t.Setenv("VERCEL", "1")
@@ -630,5 +633,64 @@ func TestHandleVercelStreamSwitchReuploadsCurrentInputFile(t *testing.T) {
 	promptText, _ := payload["prompt"].(string)
 	if !strings.Contains(promptText, "DS2API_TOOLS.txt") {
 		t.Fatalf("expected switched payload prompt to retain tools file reference, got %q", promptText)
+	}
+}
+
+func TestHandleVercelStreamPrepareInlinesTextFilesForExpert(t *testing.T) {
+	t.Setenv("VERCEL", "1")
+	t.Setenv("DS2API_VERCEL_INTERNAL_SECRET", "stream-secret")
+
+	store := files.NewMemoryContentStore(100<<20, time.Hour)
+	if err := store.Store("file-text-1", "notes.txt", "text/plain", []byte("inlined expert text")); err != nil {
+		t.Fatalf("store failed: %v", err)
+	}
+
+	enabled := true
+	h := &Handler{
+		Store: mockOpenAIConfig{
+			expertTextInlineEnabled: &enabled,
+		},
+		Auth:         streamStatusAuthStub{},
+		DS:           &inlineUploadDSStub{},
+		ContentStore: store,
+	}
+
+	reqBody, _ := json.Marshal(map[string]any{
+		"model": "deepseek-v4-pro",
+		"messages": []any{
+			map[string]any{
+				"role": "user",
+				"content": []any{
+					map[string]any{"type": "text", "text": "read this"},
+					map[string]any{"type": "input_file", "file_id": "file-text-1"},
+				},
+			},
+		},
+		"stream": true,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions?__stream_prepare=1", strings.NewReader(string(reqBody)))
+	req.Header.Set("Authorization", "Bearer direct-token")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Ds2-Internal-Token", "stream-secret")
+	rec := httptest.NewRecorder()
+
+	h.handleVercelStreamPrepare(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	finalPrompt, _ := body["final_prompt"].(string)
+	if !strings.Contains(finalPrompt, "inlined expert text") {
+		t.Fatalf("expected final_prompt to contain inlined file text, got %q", finalPrompt)
+	}
+	payload, _ := body["payload"].(map[string]any)
+	refIDs, _ := payload["ref_file_ids"].([]any)
+	if len(refIDs) != 0 {
+		t.Fatalf("expected expert payload ref_file_ids empty, got %#v", refIDs)
 	}
 }

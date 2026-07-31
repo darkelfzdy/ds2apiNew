@@ -85,6 +85,8 @@ func (claudeCurrentInputAuth) ToolsEnabledForRequest(_ *http.Request) bool { ret
 
 func (claudeCurrentInputAuth) SetAccountMutedUntil(_ *auth.RequestAuth, _ float64) {}
 
+func (claudeCurrentInputAuth) SetAccountBanned(_ *auth.RequestAuth, _ string) {}
+
 type claudeCurrentInputDS struct {
 	uploads []dsclient.UploadFileRequest
 	payload map[string]any

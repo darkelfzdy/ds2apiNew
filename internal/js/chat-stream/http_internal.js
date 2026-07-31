@@ -96,6 +96,12 @@ async function fetchStreamSwitch(req, leaseID, options = {}) {
   if (options.mute_until && typeof options.mute_until === 'number' && options.mute_until > 0) {
     switchBody.mute_until = options.mute_until;
   }
+  if (options.banned) {
+    switchBody.banned = true;
+    if (options.banned_reason) {
+      switchBody.banned_reason = asString(options.banned_reason);
+    }
+  }
   const upstream = await fetch(url.toString(), {
     method: 'POST',
     headers: buildInternalGoHeaders(req, { withInternalToken: true, withContentType: true }),

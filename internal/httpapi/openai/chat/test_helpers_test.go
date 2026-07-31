@@ -9,20 +9,24 @@ import (
 
 	"ds2api/internal/auth"
 	dsclient "ds2api/internal/deepseek/client"
+	"ds2api/internal/httpapi/openai/files"
 )
 
 type mockOpenAIConfig struct {
-	aliases             map[string]string
-	autoDeleteMode      string
-	toolMode            string
-	earlyEmit           string
-	responsesTTL        int
-	embedProv           string
-	currentInputEnabled bool
-	currentInputMin     int
-	thinkingInjection   *bool
-	thinkingPrompt      string
-	autoRouteVision     bool
+	aliases                  map[string]string
+	autoDeleteMode           string
+	toolMode                 string
+	earlyEmit                string
+	responsesTTL             int
+	embedProv                string
+	currentInputEnabled      bool
+	currentInputMin          int
+	thinkingInjection        *bool
+	thinkingPrompt           string
+	autoRouteVision          bool
+	expertTextInlineEnabled  *bool
+	expertTextInlineMaxBytes int
+	expertTextInlineExts     []string
 }
 
 func (m mockOpenAIConfig) ModelAliases() map[string]string     { return m.aliases }
@@ -50,7 +54,22 @@ func (m mockOpenAIConfig) ThinkingInjectionEnabled() bool {
 func (m mockOpenAIConfig) ThinkingInjectionPrompt() string { return m.thinkingPrompt }
 func (mockOpenAIConfig) ExpertPromptSegmentEnabled() bool  { return false }
 func (mockOpenAIConfig) ExpertPromptSegmentMaxChars() int  { return 120000 }
-func (m mockOpenAIConfig) AutoRouteVisionEnabled() bool    { return m.autoRouteVision }
+func (m mockOpenAIConfig) ExpertTextFileInlineEnabled() bool {
+	if m.expertTextInlineEnabled == nil {
+		return false
+	}
+	return *m.expertTextInlineEnabled
+}
+func (m mockOpenAIConfig) ExpertTextFileInlineMaxFileBytes() int {
+	if m.expertTextInlineMaxBytes > 0 {
+		return m.expertTextInlineMaxBytes
+	}
+	return 3 * 1024 * 1024
+}
+func (m mockOpenAIConfig) ExpertTextFileInlineAllowedExtensions() map[string]struct{} {
+	return files.ExtensionSet(m.expertTextInlineExts)
+}
+func (m mockOpenAIConfig) AutoRouteVisionEnabled() bool { return m.autoRouteVision }
 
 type streamStatusAuthStub struct{}
 
@@ -73,6 +92,8 @@ func (streamStatusAuthStub) ToolsEnabledForRequest(_ *http.Request) bool { retur
 
 func (streamStatusAuthStub) SetAccountMutedUntil(_ *auth.RequestAuth, _ float64) {}
 
+func (streamStatusAuthStub) SetAccountBanned(_ *auth.RequestAuth, _ string) {}
+
 type streamStatusManagedAuthStub struct{}
 
 func (streamStatusManagedAuthStub) Determine(_ *http.Request) (*auth.RequestAuth, error) {
@@ -94,6 +115,8 @@ func (streamStatusManagedAuthStub) Release(_ *auth.RequestAuth) {}
 func (streamStatusManagedAuthStub) ToolsEnabledForRequest(_ *http.Request) bool { return true }
 
 func (streamStatusManagedAuthStub) SetAccountMutedUntil(_ *auth.RequestAuth, _ float64) {}
+
+func (streamStatusManagedAuthStub) SetAccountBanned(_ *auth.RequestAuth, _ string) {}
 
 type streamStatusDSStub struct {
 	resp *http.Response

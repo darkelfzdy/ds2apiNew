@@ -24,6 +24,7 @@ type AuthResolver interface {
 	Release(a *auth.RequestAuth)
 	ToolsEnabledForRequest(req *http.Request) bool
 	SetAccountMutedUntil(a *auth.RequestAuth, muteUntil float64)
+	SetAccountBanned(a *auth.RequestAuth, reason string)
 }
 
 type DeepSeekCaller interface {
@@ -51,6 +52,9 @@ type ConfigReader interface {
 	ThinkingInjectionPrompt() string
 	ExpertPromptSegmentEnabled() bool
 	ExpertPromptSegmentMaxChars() int
+	ExpertTextFileInlineEnabled() bool
+	ExpertTextFileInlineMaxFileBytes() int
+	ExpertTextFileInlineAllowedExtensions() map[string]struct{}
 	AutoRouteVisionEnabled() bool
 }
 

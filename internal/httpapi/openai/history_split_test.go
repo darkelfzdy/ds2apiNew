@@ -65,6 +65,8 @@ func (streamStatusManagedAuthStub) ToolsEnabledForRequest(_ *http.Request) bool 
 
 func (streamStatusManagedAuthStub) SetAccountMutedUntil(_ *auth.RequestAuth, _ float64) {}
 
+func (streamStatusManagedAuthStub) SetAccountBanned(_ *auth.RequestAuth, _ string) {}
+
 func TestBuildOpenAICurrentInputContextTranscriptUsesNumberedHistorySections(t *testing.T) {
 	transcript := buildOpenAICurrentInputContextTranscript(historySplitTestMessages())
 

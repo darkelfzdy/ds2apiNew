@@ -2,23 +2,20 @@
   <img src="webui/public/ds2api-favicon.svg" width="128" height="128" alt="DS2API icon" />
 </p>
 
-# DS2API
+# DS2API → FreeBuff2API
 
-## 注：本项目由原作者版本([CJackHwang/ds2api](https://github.com/CJackHwang/ds2api)) 二次开发而来。原仓库现已归档
+> 基于 [ouqiting/ds2api](https://github.com/ouqiting/ds2api) 的定制分支，为 FreeBuff 提供 DeepSeek API 转换服务。
 
-### 在保留核心功能的基础上做出了若干修改，主要解决deepseek封号问题。效果显著(?) 实测目前个人使用几乎已无禁言封号风险
+## 当前版本：v3.3.0-freebuff
 
+### 在上游基础上做了若干修改，主要解决 deepseek 封号问题。实测目前个人使用几乎已无禁言封号风险
 
-
-<a href="https://trendshift.io/repositories/24508" target="_blank"><img src="https://trendshift.io/api/badge/repositories/24508" alt="CJackHwang%2Fds2api | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
-
-[![License](https://img.shields.io/github/license/CJackHwang/ds2api.svg)](LICENSE)
-![Stars](https://img.shields.io/github/stars/CJackHwang/ds2api.svg)
-![Forks](https://img.shields.io/github/forks/CJackHwang/ds2api.svg)
+[![License](https://img.shields.io/github/license/t479842598/ds2apiNew.svg)](LICENSE)
+![Stars](https://img.shields.io/github/stars/t479842598/ds2apiNew.svg)
+![Forks](https://img.shields.io/github/forks/t479842598/ds2apiNew.svg)
 [![Docker](https://img.shields.io/badge/docker-ready-blue.svg)](docs/DEPLOY.md)
 
-[![Deploy on Zeabur](https://zeabur.com/button.svg)](https://zeabur.com/templates/L4CFHP)
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/CJackHwang/ds2api)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/t479842598/ds2apiNew)
 
 将 DeepSeek Web 对话能力转换为 OpenAI、Claude 与 Gemini 兼容 API。核心后端以 **Go** 实现，Vercel 流式桥接额外使用少量 Node Runtime，前端为 React WebUI 管理台（源码在 `webui/`，部署时自动构建到 `static/admin`）。
 
@@ -307,8 +304,8 @@ base64 < config.json | tr -d '\n'
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/ouqiting/ds2api.git
-cd ds2api
+git clone https://github.com/t479842598/ds2apiNew.git
+cd ds2apiNew
 
 # 2. 配置
 cp config.example.json config.json
@@ -447,7 +444,7 @@ npm run build --prefix webui
 
 - **触发条件**：默认仅在 GitHub Release `published` 时自动触发；也支持在 Actions 页面手动 `workflow_dispatch`，并填写 `release_tag` 复跑/补发
 - **构建产物**：多平台二进制包（`linux/amd64`、`linux/arm64`、`darwin/amd64`、`windows/amd64`）、Linux Docker 镜像导出包 + `sha256sums.txt`
-- **容器镜像发布**：仅推送到 GHCR（`ghcr.io/ouqiting/ds2api`）
+- **容器镜像发布**：推送到 GHCR（`ghcr.io/t479842598/ds2apiNew`）
 - **每个二进制压缩包包含**：`ds2api` 可执行文件、`static/admin`、`config.example.json`、`.env.example`、`README.MD`、`README.en.md`、`LICENSE`
 
 ## 免责声明

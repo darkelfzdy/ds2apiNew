@@ -137,7 +137,7 @@ func TestHandleVercelStreamPrepareAppliesCurrentInputFile(t *testing.T) {
 		t.Fatalf("expected payload object, got %#v", body["payload"])
 	}
 	promptText, _ := payload["prompt"].(string)
-	if !strings.Contains(promptText, "Continue from the latest state in the attached DS2API_HISTORY.txt context.") {
+	if !strings.Contains(promptText, "继续会话") {
 		t.Fatalf("expected continuation prompt, got %s", promptText)
 	}
 	if strings.Contains(promptText, "first user turn") || strings.Contains(promptText, "latest user turn") {
@@ -372,7 +372,7 @@ func TestHandleVercelStreamPrepareUploadsToolsSeparately(t *testing.T) {
 	if len(ds.uploadCalls) != 2 {
 		t.Fatalf("expected history and tools uploads, got %d", len(ds.uploadCalls))
 	}
-	if ds.uploadCalls[0].Filename != "DS2API_HISTORY.txt" || ds.uploadCalls[1].Filename != "DS2API_TOOLS.txt" {
+	if ds.uploadCalls[0].Filename != "HISTORY.txt" || ds.uploadCalls[1].Filename != "TOOLS.txt" {
 		t.Fatalf("unexpected upload filenames: %#v", ds.uploadCalls)
 	}
 	if strings.Contains(string(ds.uploadCalls[0].Data), "Description: search docs") {
@@ -387,8 +387,11 @@ func TestHandleVercelStreamPrepareUploadsToolsSeparately(t *testing.T) {
 	payload, _ := body["payload"].(map[string]any)
 	payloadPrompt, _ := payload["prompt"].(string)
 	for label, promptText := range map[string]string{"final_prompt": finalPrompt, "payload.prompt": payloadPrompt} {
-		if !strings.Contains(promptText, "DS2API_TOOLS.txt") || !strings.Contains(promptText, "工具调用格式规范") {
-			t.Fatalf("expected %s to reference tools file and retain tool instructions, got %q", label, promptText)
+		if !strings.Contains(promptText, "继续会话") || !strings.Contains(promptText, "工具调用格式规范") {
+			t.Fatalf("expected %s to retain continuation and tool instructions, got %q", label, promptText)
+		}
+		if strings.Contains(promptText, "TOOLS.txt") {
+			t.Fatalf("expected %s not to reference tools file by filename, got %q", label, promptText)
 		}
 		if strings.Contains(promptText, "Description: search docs") {
 			t.Fatalf("expected %s not to inline tool descriptions, got %q", label, promptText)
@@ -584,9 +587,9 @@ func TestHandleVercelStreamSwitchReuploadsCurrentInputFile(t *testing.T) {
 		RequestedModel:          "deepseek-v4-flash",
 		ResolvedModel:           "deepseek-v4-flash",
 		ResponseModel:           "deepseek-v4-flash",
-		FinalPrompt:             "Continue from the latest state in the attached DS2API_HISTORY.txt context. Available tool descriptions and parameter schemas are attached in DS2API_TOOLS.txt; use only those tools and follow the tool-call format rules in this prompt.",
-		PromptTokenText:         "# DS2API_HISTORY.txt\n\n=== 1. USER ===\nhello\n\n# DS2API_TOOLS.txt\nAvailable tool descriptions and parameter schemas for this request.\n\nYou have access to these tools:\n\nTool: search\nDescription: search docs\nParameters: {\"type\":\"object\"}\n",
-		HistoryText:             "# DS2API_HISTORY.txt\n\n=== 1. USER ===\nhello\n",
+		FinalPrompt:             "继续会话 使用工具时请参照说明与格式要求，仅使用所列出的工具",
+		PromptTokenText:         "# HISTORY.txt\n\n=== 1. USER ===\nhello\n\n# TOOLS.txt\nAvailable tool descriptions and parameter schemas for this request.\n\nYou have access to these tools:\n\nTool: search\nDescription: search docs\nParameters: {\"type\":\"object\"}\n",
+		HistoryText:             "# HISTORY.txt\n\n=== 1. USER ===\nhello\n",
 		CurrentInputFileApplied: true,
 		CurrentInputFileID:      "file-old",
 		CurrentToolsFileID:      "file-old-tools",
@@ -616,7 +619,7 @@ func TestHandleVercelStreamSwitchReuploadsCurrentInputFile(t *testing.T) {
 	if len(ds.uploadCalls) != 2 {
 		t.Fatalf("expected current input and tools reupload on switched account, got %d", len(ds.uploadCalls))
 	}
-	if ds.uploadCalls[0].Filename != "DS2API_HISTORY.txt" || ds.uploadCalls[1].Filename != "DS2API_TOOLS.txt" {
+	if ds.uploadCalls[0].Filename != "HISTORY.txt" || ds.uploadCalls[1].Filename != "TOOLS.txt" {
 		t.Fatalf("unexpected reupload filenames: %#v", ds.uploadCalls)
 	}
 	var body map[string]any
@@ -632,8 +635,11 @@ func TestHandleVercelStreamSwitchReuploadsCurrentInputFile(t *testing.T) {
 		t.Fatalf("expected reuploaded current input ref plus client ref, got %#v", payload["ref_file_ids"])
 	}
 	promptText, _ := payload["prompt"].(string)
-	if !strings.Contains(promptText, "DS2API_TOOLS.txt") {
-		t.Fatalf("expected switched payload prompt to retain tools file reference, got %q", promptText)
+	if !strings.Contains(promptText, "继续会话") || !strings.Contains(promptText, "使用工具时请参照说明") {
+		t.Fatalf("expected switched payload prompt to retain continuation and tool guidance, got %q", promptText)
+	}
+	if strings.Contains(promptText, "TOOLS.txt") {
+		t.Fatalf("switched payload prompt should not reference tools file by filename, got %q", promptText)
 	}
 }
 

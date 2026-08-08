@@ -18,6 +18,8 @@ const (
 	currentToolsFilename    = promptcompat.CurrentToolsContextFilename
 	currentInputContentType = "text/plain; charset=utf-8"
 	currentInputPurpose     = "assistants"
+
+	currentInputContinuationInstruction = "Continue from the latest state in the attached HISTORY.txt context. Treat it as the current working state and answer the latest user request directly.Do not mention HISTORY.txt in the main text."
 )
 
 type CurrentInputConfigReader interface {
@@ -54,6 +56,7 @@ func (s Service) ApplyCurrentInputFile(ctx context.Context, a *auth.RequestAuth,
 	if strings.TrimSpace(fileText) == "" {
 		return stdReq, errors.New("current user input file produced empty transcript")
 	}
+	fileText = injectCurrentInputFileContinuation(fileText)
 	toolsText, _ := promptcompat.BuildOpenAIToolsContextTranscript(stdReq.ToolsRaw, stdReq.ToolChoice)
 	modelType := "default"
 	if resolvedType, ok := config.GetModelType(stdReq.ResolvedModel); ok {
@@ -188,10 +191,20 @@ func latestUserInputForFile(messages []any) (int, string) {
 	return -1, ""
 }
 
+func injectCurrentInputFileContinuation(transcript string) string {
+	trimmed := strings.TrimSpace(transcript)
+	const summaryMarker = "Prior conversation history and tool progress."
+	if idx := strings.Index(trimmed, summaryMarker); idx >= 0 {
+		after := idx + len(summaryMarker)
+		return trimmed[:after] + "\n" + currentInputContinuationInstruction + trimmed[after:]
+	}
+	return trimmed + "\n\n" + currentInputContinuationInstruction
+}
+
 func currentInputFilePrompt(hasToolsFile bool) string {
-	prompt := "Continue from the latest state in the attached DS2API_HISTORY.txt context. Treat it as the current working state and answer the latest user request directly."
+	prompt := "继续会话"
 	if hasToolsFile {
-		prompt += " Available tool descriptions and parameter schemas are attached in DS2API_TOOLS.txt; use only those tools and follow the tool-call format rules in this prompt."
+		prompt += " 使用工具时请参照说明与格式要求，仅使用所列出的工具"
 	}
 	return prompt
 }

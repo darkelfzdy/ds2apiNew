@@ -102,7 +102,7 @@ func TestResponsesRecordsResponseHistory(t *testing.T) {
 	if item.Surface != "openai.responses" {
 		t.Fatalf("unexpected surface: %q", item.Surface)
 	}
-	if !strings.Contains(item.UserInput, "Continue from the latest state in the attached DS2API_HISTORY.txt context.") {
+	if !strings.Contains(item.UserInput, "继续会话") {
 		t.Fatalf("unexpected user input: %q", item.UserInput)
 	}
 	if !strings.Contains(item.HistoryText, "hello responses") {

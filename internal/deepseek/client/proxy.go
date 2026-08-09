@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -79,6 +80,25 @@ func proxyDialContext(proxyCfg config.Proxy) (trans.DialContextFunc, error) {
 		}
 		return dialer.Dial(network, target)
 	}, nil
+}
+
+func httpCloakProxyURL(proxyCfg config.Proxy) string {
+	proxyCfg = config.NormalizeProxy(proxyCfg)
+	scheme := strings.ToLower(strings.TrimSpace(proxyCfg.Type))
+	if scheme == "socks5h" {
+		scheme = "socks5"
+	}
+	if scheme == "" {
+		scheme = "socks5"
+	}
+	u := &url.URL{
+		Scheme: scheme,
+		Host:   net.JoinHostPort(proxyCfg.Host, strconv.Itoa(proxyCfg.Port)),
+	}
+	if proxyCfg.Username != "" {
+		u.User = url.UserPassword(proxyCfg.Username, proxyCfg.Password)
+	}
+	return u.String()
 }
 
 func (c *Client) defaultRequestClients() requestClients {
@@ -155,9 +175,10 @@ func (c *Client) requestClientsForAccount(acc config.Account) requestClients {
 		return c.defaultRequestClients()
 	}
 
+	proxyURL := httpCloakProxyURL(proxyCfg)
 	bundle := c.decorate(requestClients{
-		regular:   trans.NewWithDialContext(60*time.Second, dialContext),
-		stream:    trans.NewWithDialContext(0, dialContext),
+		regular:   trans.NewWithProxy(60*time.Second, proxyURL),
+		stream:    trans.NewWithProxy(0, proxyURL),
 		fallback:  trans.NewFallbackClient(60*time.Second, dialContext),
 		fallbackS: trans.NewFallbackClient(0, dialContext),
 	})

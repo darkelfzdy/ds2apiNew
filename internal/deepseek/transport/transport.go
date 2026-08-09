@@ -32,6 +32,7 @@ type Client struct {
 	timeout     time.Duration
 	dialContext DialContextFunc
 	h2          *fhttp2.Transport
+	cloak       *httpCloakDoer
 
 	mu      sync.Mutex
 	conns   map[string]*fhttp2.ClientConn // authority (host:port) -> pooled h2 conn
@@ -39,7 +40,21 @@ type Client struct {
 }
 
 func New(timeout time.Duration) *Client {
-	return NewWithDialContext(timeout, nil)
+	return newHTTPCloakTransport(timeout, "", timeout == 0)
+}
+
+// NewWithProxy creates a browser-profiled client using httpcloak's TCP proxy
+// support. The proxy URL is kept at the transport boundary so account-level
+// proxy pools do not need to know about httpcloak types.
+func NewWithProxy(timeout time.Duration, proxyURL string) *Client {
+	return newHTTPCloakTransport(timeout, proxyURL, timeout == 0)
+}
+
+func newHTTPCloakTransport(timeout time.Duration, proxyURL string, streaming bool) *Client {
+	return &Client{
+		timeout: timeout,
+		cloak:   newHTTPCloakDoer(timeout, proxyURL, streaming),
+	}
 }
 
 func NewWithDialContext(timeout time.Duration, dialContext DialContextFunc) *Client {
@@ -61,6 +76,9 @@ func NewWithDialContext(timeout time.Duration, dialContext DialContextFunc) *Cli
 }
 
 func (c *Client) Do(req *http.Request) (*http.Response, error) {
+	if c != nil && c.cloak != nil {
+		return c.cloak.Do(req)
+	}
 	// Ensure req.Host is set and remove any explicit Host header. HTTP/2
 	// transports use :authority and may reject or mishandle a Host header.
 	if h := req.Header.Get("Host"); h != "" {

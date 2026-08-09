@@ -83,7 +83,7 @@ var webBrowserHeaders = map[string]string{
 	// 浏览器 fetch 发的是 */*，不是 application/json。
 	// 只覆盖 web 平台：登录接口沿用 App 风格头（见 LoginHeaders）。
 	"Accept": "*/*",
-	// 必须显式声明：否则 Go/fhttp 会自动补一个只含 gzip 的 accept-encoding，
+	// 必须显式声明：否则 transport 会自动补一个只含 gzip 的 accept-encoding，
 	// 而自称 Chrome 却只接受 gzip 是明显异常。响应解压见 client.decompressBody。
 	"Accept-Encoding": "gzip, deflate, br, zstd",
 	// Chrome 12x+ 在 fetch/XHR 上会带 priority。

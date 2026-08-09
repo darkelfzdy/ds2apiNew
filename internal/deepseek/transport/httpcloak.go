@@ -63,7 +63,7 @@ func newHTTPCloakClient(timeout time.Duration, proxyURL string) *httpcloak.Clien
 	if proxyURL != "" {
 		opts = append(opts, httpcloak.WithTCPProxy(proxyURL))
 	}
-	client := httpcloak.NewClient("chrome-150", opts...)
+	client := httpcloak.NewClient("chrome-150-windows", opts...)
 	client.SetHeaderOrder(mergeHeaderOrder(nil, chromeHeaderOrder))
 	return client
 }
@@ -107,9 +107,10 @@ func fromHTTPCloakResponse(resp *httpcloak.Response, req *http.Request) (*http.R
 	return &http.Response{
 		Status:        fmt.Sprintf("%d %s", resp.StatusCode, http.StatusText(resp.StatusCode)),
 		StatusCode:    resp.StatusCode,
-		Header:        httpCloakHeaders(resp.Headers),
+		Header:        normalizedHTTPCloakHeaders(resp.Headers),
 		Body:          resp.Body,
 		ContentLength: -1,
+		Uncompressed:  true,
 		Request:       req,
 	}, nil
 }
@@ -121,9 +122,10 @@ func fromHTTPCloakStreamResponse(resp *httpcloak.StreamResponse, req *http.Reque
 	return &http.Response{
 		Status:        fmt.Sprintf("%d %s", resp.StatusCode, http.StatusText(resp.StatusCode)),
 		StatusCode:    resp.StatusCode,
-		Header:        httpCloakHeaders(resp.Headers),
+		Header:        normalizedHTTPCloakHeaders(resp.Headers),
 		Body:          resp,
-		ContentLength: resp.ContentLength,
+		ContentLength: -1,
+		Uncompressed:  true,
 		Request:       req,
 	}, nil
 }
@@ -135,6 +137,17 @@ func httpCloakHeaders(headers map[string][]string) http.Header {
 			out.Add(key, value)
 		}
 	}
+	return out
+}
+
+// httpcloak transparently decodes advertised content encodings, but retains
+// the original Content-Encoding/Content-Length metadata. wireDoer performs
+// the legacy ds2api decompression step, so forwarding those headers would make
+// it decode an already-decoded body a second time.
+func normalizedHTTPCloakHeaders(headers map[string][]string) http.Header {
+	out := httpCloakHeaders(headers)
+	out.Del("Content-Encoding")
+	out.Del("Content-Length")
 	return out
 }
 

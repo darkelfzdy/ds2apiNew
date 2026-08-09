@@ -18,45 +18,27 @@ func BuildResponseObject(responseID, model, finalPrompt, finalThinking, finalTex
 
 func BuildResponseObjectWithToolCalls(responseID, model, finalPrompt, finalThinking, finalText string, detected []toolcall.ParsedToolCall, toolsRaw any) map[string]any {
 	exposedOutputText := finalText
-	output := make([]any, 0, 2)
+	output := make([]any, 0, 3)
+	if strings.TrimSpace(finalThinking) != "" {
+		output = append(output, buildResponsesReasoningItem(finalThinking))
+	}
 	if len(detected) > 0 {
 		exposedOutputText = ""
-		if strings.TrimSpace(finalThinking) != "" {
-			output = append(output, map[string]any{
-				"type":   "message",
-				"id":     "msg_" + strings.ReplaceAll(uuid.NewString(), "-", ""),
-				"role":   "assistant",
-				"status": "completed",
-				"content": []any{map[string]any{
-					"type": "reasoning",
-					"text": finalThinking,
-				}},
-			})
-		}
 		output = append(output, toResponsesFunctionCallItems(detected, toolsRaw)...)
 	} else {
-		content := make([]any, 0, 2)
-		if finalThinking != "" {
-			content = append([]any{map[string]any{
-				"type": "reasoning",
-				"text": finalThinking,
-			}}, content...)
-		}
-		if strings.TrimSpace(finalText) != "" {
-			content = append(content, map[string]any{
-				"type": "output_text",
-				"text": finalText,
+		if strings.TrimSpace(finalText) == "" {
+			if strings.TrimSpace(finalThinking) != "" {
+				exposedOutputText = finalThinking
+			}
+		} else {
+			output = append(output, map[string]any{
+				"type":    "message",
+				"id":      "msg_" + strings.ReplaceAll(uuid.NewString(), "-", ""),
+				"role":    "assistant",
+				"status":  "completed",
+				"content": []any{map[string]any{"type": "output_text", "text": finalText}},
 			})
 		}
-		if strings.TrimSpace(finalText) == "" && strings.TrimSpace(finalThinking) != "" {
-			exposedOutputText = finalThinking
-		}
-		output = append(output, map[string]any{
-			"type":    "message",
-			"id":      "msg_" + strings.ReplaceAll(uuid.NewString(), "-", ""),
-			"role":    "assistant",
-			"content": content,
-		})
 	}
 	return BuildResponseObjectFromItems(
 		responseID,
@@ -67,6 +49,22 @@ func BuildResponseObjectWithToolCalls(responseID, model, finalPrompt, finalThink
 		output,
 		exposedOutputText,
 	)
+}
+
+func buildResponsesReasoningItem(finalThinking string) map[string]any {
+	return map[string]any{
+		"id":   "rsn_" + strings.ReplaceAll(uuid.NewString(), "-", ""),
+		"type": "reasoning",
+		"summary": []any{map[string]any{
+			"type": "summary_text",
+			"text": finalThinking,
+		}},
+		"content": []any{map[string]any{
+			"type": "reasoning_text",
+			"text": finalThinking,
+		}},
+		"status": "completed",
+	}
 }
 
 func BuildResponseObjectFromItems(responseID, model, finalPrompt, finalThinking, finalText string, output []any, outputText string) map[string]any {

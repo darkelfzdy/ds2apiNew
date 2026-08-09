@@ -39,28 +39,34 @@ type responsesStreamRuntime struct {
 	toolCallsEmitted     bool
 	toolCallsDoneEmitted bool
 
-	sieve             toolstream.State
-	accumulator       shared.StreamAccumulator
-	visibleText       strings.Builder
-	responseMessageID int
-	upstreamErr       string
-	streamToolCallIDs map[int]string
-	functionItemIDs   map[int]string
-	functionOutputIDs map[int]int
-	functionArgs      map[int]string
-	functionDone      map[int]bool
-	functionAdded     map[int]bool
-	functionNames     map[int]string
-	messageItemID     string
-	messageOutputID   int
-	nextOutputID      int
-	messageAdded      bool
-	messagePartAdded  bool
-	sequence          int
-	failed            bool
-	finalErrorStatus  int
-	finalErrorMessage string
-	finalErrorCode    string
+	sieve                toolstream.State
+	accumulator          shared.StreamAccumulator
+	visibleText          strings.Builder
+	visibleReasoning     strings.Builder
+	responseMessageID    int
+	upstreamErr          string
+	streamToolCallIDs    map[int]string
+	functionItemIDs      map[int]string
+	functionOutputIDs    map[int]int
+	functionArgs         map[int]string
+	functionDone         map[int]bool
+	functionAdded        map[int]bool
+	functionNames        map[int]string
+	messageItemID        string
+	messageOutputID      int
+	nextOutputID         int
+	messageAdded         bool
+	messagePartAdded     bool
+	reasoningItemID      string
+	reasoningOutputIndex int
+	reasoningItemAdded   bool
+	reasoningPartAdded   bool
+	reasoningClosed      bool
+	sequence             int
+	failed               bool
+	finalErrorStatus     int
+	finalErrorMessage    string
+	finalErrorCode       string
 
 	persistResponse func(obj map[string]any)
 	history         *responsehistory.Session
@@ -107,10 +113,12 @@ func newResponsesStreamRuntime(
 		functionAdded:         map[int]bool{},
 		functionNames:         map[int]string{},
 		messageOutputID:       -1,
+		reasoningOutputIndex:  -1,
 		toolChoice:            toolChoice,
 		traceID:               traceID,
 		persistResponse:       persistResponse,
 		history:               history,
+		visibleReasoning:      strings.Builder{},
 		accumulator: shared.StreamAccumulator{
 			ThinkingEnabled:       thinkingEnabled,
 			SearchEnabled:         searchEnabled,
@@ -201,6 +209,7 @@ func (s *responsesStreamRuntime) finalize(finishReason string, deferEmptyOutput 
 		}
 	}
 
+	s.closeReasoningItem()
 	s.closeMessageItem()
 
 	outcome := assistantturn.FinalizeTurn(turn, assistantturn.FinalizeOptions{

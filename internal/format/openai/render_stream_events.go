@@ -83,12 +83,27 @@ func BuildResponsesTextDonePayload(responseID, itemID string, outputIndex, conte
 	}
 }
 
-func BuildResponsesReasoningDeltaPayload(responseID, delta string) map[string]any {
+func BuildResponsesReasoningTextDeltaPayload(responseID, itemID string, outputIndex, contentIndex int, delta string) map[string]any {
 	return map[string]any{
-		"type":        "response.reasoning.delta",
-		"id":          responseID,
-		"response_id": responseID,
-		"delta":       delta,
+		"type":          "response.reasoning_text.delta",
+		"id":            responseID,
+		"response_id":   responseID,
+		"item_id":       itemID,
+		"output_index":  outputIndex,
+		"content_index": contentIndex,
+		"delta":         delta,
+	}
+}
+
+func BuildResponsesReasoningTextDonePayload(responseID, itemID string, outputIndex, contentIndex int, text string) map[string]any {
+	return map[string]any{
+		"type":          "response.reasoning_text.done",
+		"id":            responseID,
+		"response_id":   responseID,
+		"item_id":       itemID,
+		"output_index":  outputIndex,
+		"content_index": contentIndex,
+		"text":          text,
 	}
 }
 

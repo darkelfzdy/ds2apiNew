@@ -2,8 +2,6 @@ package responses
 
 import (
 	"strings"
-
-	openaifmt "ds2api/internal/format/openai"
 )
 
 type responsesDeltaBatch struct {
@@ -30,7 +28,7 @@ func (b *responsesDeltaBatch) flush() {
 	text := b.text.String()
 	switch b.kind {
 	case "reasoning":
-		b.runtime.sendEvent("response.reasoning.delta", openaifmt.BuildResponsesReasoningDeltaPayload(b.runtime.responseID, text))
+		b.runtime.emitReasoningDelta(text)
 	case "text":
 		b.runtime.emitTextDelta(text)
 	}

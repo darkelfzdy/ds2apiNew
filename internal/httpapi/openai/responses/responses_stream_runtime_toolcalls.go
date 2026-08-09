@@ -69,10 +69,112 @@ func (s *responsesStreamRuntime) ensureMessageContentPartAdded() {
 	s.messagePartAdded = true
 }
 
+func (s *responsesStreamRuntime) ensureReasoningItemAdded() {
+	if s.reasoningItemAdded {
+		return
+	}
+	s.reasoningItemID = "rsn_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	s.reasoningOutputIndex = s.allocateOutputIndex()
+	item := map[string]any{
+		"id":      s.reasoningItemID,
+		"type":    "reasoning",
+		"summary": []any{},
+		"status":  "in_progress",
+	}
+	s.sendEvent(
+		"response.output_item.added",
+		openaifmt.BuildResponsesOutputItemAddedPayload(s.responseID, s.reasoningItemID, s.reasoningOutputIndex, item),
+	)
+	s.reasoningItemAdded = true
+}
+
+func (s *responsesStreamRuntime) ensureReasoningContentPartAdded() {
+	if s.reasoningPartAdded {
+		return
+	}
+	s.ensureReasoningItemAdded()
+	s.sendEvent(
+		"response.content_part.added",
+		openaifmt.BuildResponsesContentPartAddedPayload(
+			s.responseID,
+			s.reasoningItemID,
+			s.reasoningOutputIndex,
+			0,
+			map[string]any{"type": "reasoning_text", "text": ""},
+		),
+	)
+	s.reasoningPartAdded = true
+}
+
+func (s *responsesStreamRuntime) emitReasoningDelta(content string) {
+	if content == "" {
+		return
+	}
+	s.ensureReasoningContentPartAdded()
+	s.visibleReasoning.WriteString(content)
+	s.sendEvent(
+		"response.reasoning_text.delta",
+		openaifmt.BuildResponsesReasoningTextDeltaPayload(
+			s.responseID,
+			s.reasoningItemID,
+			s.reasoningOutputIndex,
+			0,
+			content,
+		),
+	)
+}
+
+func (s *responsesStreamRuntime) closeReasoningItem() {
+	if !s.reasoningItemAdded || s.reasoningClosed {
+		return
+	}
+	s.reasoningClosed = true
+	text := s.visibleReasoning.String()
+	s.sendEvent(
+		"response.reasoning_text.done",
+		openaifmt.BuildResponsesReasoningTextDonePayload(
+			s.responseID,
+			s.reasoningItemID,
+			s.reasoningOutputIndex,
+			0,
+			text,
+		),
+	)
+	if s.reasoningPartAdded {
+		s.sendEvent(
+			"response.content_part.done",
+			openaifmt.BuildResponsesContentPartDonePayload(
+				s.responseID,
+				s.reasoningItemID,
+				s.reasoningOutputIndex,
+				0,
+				map[string]any{"type": "reasoning_text", "text": text},
+			),
+		)
+		s.reasoningPartAdded = false
+	}
+	item := map[string]any{
+		"id":   s.reasoningItemID,
+		"type": "reasoning",
+		"summary": []map[string]any{
+			{"type": "summary_text", "text": text},
+		},
+		"content": []map[string]any{
+			{"type": "reasoning_text", "text": text},
+		},
+		"status": "completed",
+	}
+	s.sendEvent(
+		"response.output_item.done",
+		openaifmt.BuildResponsesOutputItemDonePayload(s.responseID, s.reasoningItemID, s.reasoningOutputIndex, item),
+	)
+}
+
 func (s *responsesStreamRuntime) emitTextDelta(content string) {
 	if content == "" {
 		return
 	}
+	s.closeReasoningItem()
 	s.ensureMessageContentPartAdded()
 	s.visibleText.WriteString(content)
 	s.sendEvent(
@@ -179,6 +281,7 @@ func (s *responsesStreamRuntime) ensureFunctionItemAdded(callIndex int, name str
 	if s.functionAdded[callIndex] {
 		return
 	}
+	s.closeReasoningItem()
 	fnName := strings.TrimSpace(s.functionNames[callIndex])
 	if fnName == "" {
 		return

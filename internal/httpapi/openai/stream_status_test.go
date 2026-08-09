@@ -508,7 +508,7 @@ func TestResponsesStreamRetriesThinkingOnlyOutput(t *testing.T) {
 	if strings.Contains(body, "response.failed") {
 		t.Fatalf("did not expect premature response.failed, body=%s", body)
 	}
-	if !strings.Contains(body, "response.reasoning.delta") || !strings.Contains(body, "response.output_text.delta") || !strings.Contains(body, "response.completed") {
+	if !strings.Contains(body, "response.reasoning_text.delta") || !strings.Contains(body, "response.output_text.delta") || !strings.Contains(body, "response.completed") {
 		t.Fatalf("expected reasoning, text delta, and completed events, body=%s", body)
 	}
 	if strings.Count(body, "data: [DONE]") != 1 {
@@ -554,21 +554,26 @@ func TestResponsesNonStreamRetriesThinkingOnlyOutput(t *testing.T) {
 	if len(output) == 0 {
 		t.Fatalf("expected output items, got %#v", out)
 	}
-	item, _ := output[0].(map[string]any)
-	content, _ := item["content"].([]any)
-	if len(content) == 0 {
-		t.Fatalf("expected content entries, got %#v", item)
-	}
 	var textEntry map[string]any
-	for _, entry := range content {
-		obj, _ := entry.(map[string]any)
-		if asString(obj["type"]) == "output_text" {
-			textEntry = obj
+	for _, it := range output {
+		item, _ := it.(map[string]any)
+		content, _ := item["content"].([]any)
+		for _, entry := range content {
+			obj, _ := entry.(map[string]any)
+			if asString(obj["type"]) == "output_text" {
+				textEntry = obj
+				break
+			}
+		}
+		if textEntry != nil {
 			break
 		}
 	}
+	if textEntry == nil {
+		t.Fatalf("expected output_text entry, got %#v", out["output"])
+	}
 	if asString(textEntry["text"]) != "visible" {
-		t.Fatalf("expected visible text entry, got %#v", content)
+		t.Fatalf("expected visible text entry, got %#v", textEntry)
 	}
 }
 

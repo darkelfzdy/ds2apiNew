@@ -125,3 +125,16 @@ func TestGetOllamaModelRouteNotFound(t *testing.T) {
 		t.Fatalf("expected 404, got %d body=%s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestGetOllamaModelRouteRejectsOversizedBody(t *testing.T) {
+	h := &ollamaTestSurface{}
+	r := chi.NewRouter()
+	registerOllamaTestRoutes(r, h)
+	body := `{"model":"deepseek-v4-flash","padding":"` + strings.Repeat("x", 100<<20) + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/show", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}

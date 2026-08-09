@@ -117,8 +117,9 @@ docker pull ghcr.io/cjackhwang/ds2api:latest
 cp .env.example .env
 cp config.example.json config.json
 
-# Edit .env and set at least:
+# Edit .env and set at least one of:
 #   DS2API_ADMIN_KEY=your-admin-key
+# or an admin password hash in config.admin.password_hash
 # Optionally set the host port:
 #   DS2API_HOST_PORT=6011
 
@@ -296,6 +297,7 @@ VERCEL_TEAM_ID=team_xxxxxxxxxxxx   # optional for personal accounts
 | `DS2API_ACCOUNT_MAX_QUEUE` | Waiting queue limit | `recommended_concurrency` |
 | `DS2API_GLOBAL_MAX_INFLIGHT` | Global inflight limit | `recommended_concurrency` |
 | `DS2API_ENV_WRITEBACK` | When `DS2API_CONFIG_JSON` is present, auto-write to `DS2API_CONFIG_PATH` and switch to file-backed mode after success (`1/true/yes/on`) | Disabled |
+| `DS2API_DEV_PACKET_CAPTURE` | Enable development packet capture; may save raw request/response content and should only be enabled in an isolated debugging environment | Disabled |
 | `DS2API_VERCEL_INTERNAL_SECRET` | Hybrid streaming internal auth | Falls back to `DS2API_ADMIN_KEY` |
 | `DS2API_VERCEL_STREAM_LEASE_TTL_SECONDS` | Stream lease TTL | `900` |
 | `DS2API_RAW_STREAM_SAMPLE_ROOT` | Raw stream sample root for saving/reading samples | `tests/raw_stream_samples` |
@@ -626,7 +628,7 @@ With custom flags:
 ```bash
 go run ./cmd/ds2api-tests \
   --config config.json \
-  --admin-key admin \
+  --admin-key "$DS2API_ADMIN_KEY" \
   --out artifacts/testsuite \
   --timeout 120 \
   --retries 2

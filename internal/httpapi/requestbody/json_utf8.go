@@ -15,6 +15,14 @@ var (
 	errRequestBodyTooLarge = errors.New("request body too large")
 )
 
+func IsTooLarge(err error) bool {
+	if errors.Is(err, errRequestBodyTooLarge) {
+		return true
+	}
+	var maxErr *http.MaxBytesError
+	return errors.As(err, &maxErr)
+}
+
 const maxJSONUTF8ValidationSize = 100 << 20
 
 // ValidateJSONUTF8 validates complete JSON request bodies before downstream

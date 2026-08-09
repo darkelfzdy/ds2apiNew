@@ -39,9 +39,9 @@ func effectiveAdminKey(store AdminConfigReader) string {
 		return v
 	}
 	warnOnce.Do(func() {
-		slog.Warn("⚠️  DS2API_ADMIN_KEY is not set! Using insecure default \"admin\". Set a strong key in production!")
+		slog.Warn("DS2API_ADMIN_KEY is not set and no admin password hash is configured; admin credential authentication is disabled")
 	})
-	return "admin"
+	return ""
 }
 
 func jwtSecret(store AdminConfigReader) string {

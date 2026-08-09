@@ -358,6 +358,15 @@ func TestVerifyAdminRequestWithAdminKey(t *testing.T) {
 	}
 }
 
+func TestVerifyAdminRequestRejectsImplicitDefaultKey(t *testing.T) {
+	t.Setenv("DS2API_ADMIN_KEY", "")
+	req, _ := http.NewRequest("GET", "/admin/config", nil)
+	req.Header.Set("Authorization", "Bearer admin")
+	if err := VerifyAdminRequest(req); err == nil {
+		t.Fatal("expected implicit default admin key to be rejected")
+	}
+}
+
 func TestVerifyAdminRequestInvalidCredentials(t *testing.T) {
 	t.Setenv("DS2API_ADMIN_KEY", "correct-key")
 	req, _ := http.NewRequest("GET", "/admin/config", nil)

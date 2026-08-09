@@ -57,6 +57,28 @@ func (h *Handler) applyNow(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "status": b.Status()})
 }
 
+// getBinary 返回二进制探测结果与下载任务状态（前端据此决定“下载mihomo”按钮可用性）。
+func (h *Handler) getBinary(w http.ResponseWriter, r *http.Request) {
+	b := h.bridgeOrFail(w)
+	if b == nil {
+		return
+	}
+	writeJSON(w, http.StatusOK, b.DownloadInfo())
+}
+
+// downloadBinary 触发后台下载 mihomo 内核到根目录，返回后前端轮询进度。
+func (h *Handler) downloadBinary(w http.ResponseWriter, r *http.Request) {
+	b := h.bridgeOrFail(w)
+	if b == nil {
+		return
+	}
+	if err := b.StartBinaryDownload(r.Context()); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"detail": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "info": b.DownloadInfo()})
+}
+
 func (h *Handler) listSubscriptions(w http.ResponseWriter, _ *http.Request) {
 	snap := h.Store.Snapshot()
 	items := make([]map[string]any, 0, len(snap.Mihomo.Subscriptions))
@@ -130,6 +152,39 @@ func (h *Handler) listNodes(w http.ResponseWriter, _ *http.Request) {
 	}
 	nodes := b.ListNodes()
 	writeJSON(w, http.StatusOK, map[string]any{"items": nodes, "total": len(nodes)})
+}
+
+// testLatency 批量测试全部订阅节点延迟（每批最多 60 并发），返回已按延迟排序的结果。
+func (h *Handler) testLatency(w http.ResponseWriter, r *http.Request) {
+	b := h.bridgeOrFail(w)
+	if b == nil {
+		return
+	}
+	items, err := b.TestLatency(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"detail": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": len(items)})
+}
+
+// assignAccounts 一键为全部账号分配节点绑定。body: {"node_keys": ["<nodeKey>", ...]}，
+// node_keys 为按顺序排列的可分配节点（已测延迟时前端只传测试成功的节点）。
+func (h *Handler) assignAccounts(w http.ResponseWriter, r *http.Request) {
+	b := h.bridgeOrFail(w)
+	if b == nil {
+		return
+	}
+	var req struct {
+		NodeKeys []string `json:"node_keys"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	bound, err := b.AssignAccounts(r.Context(), req.NodeKeys)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"detail": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "bound": bound})
 }
 
 // bindAccount 处理 PUT /mihomo/bindings/{identifier}，body: {"node": "<nodeKey>"}。

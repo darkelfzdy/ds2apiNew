@@ -29,6 +29,9 @@ func (s *Store) ConfigPath() string {
 func writeConfigFile(path string, cfg Config) error {
 	persistCfg := cfg.Clone()
 	persistCfg.ClearAccountTokens()
+	if err := saveMihomoSubscriptionsFile(persistCfg.Mihomo); err != nil {
+		return err
+	}
 	b, err := json.MarshalIndent(persistCfg, "", "  ")
 	if err != nil {
 		return err

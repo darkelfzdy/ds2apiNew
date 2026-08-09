@@ -94,12 +94,10 @@
     "mode": "none"
   },
   "mihomo": {
-    "_comment": "Mihomo 代理桥（一号一 IP）。enabled=true 后 ds2api 启动时自动拉起 mihomo 子进程；推荐在 WebUI「代理桥」页管理订阅与账号绑定，subscriptions/port_map 由系统自动维护。详见 docs/MIHOMO_BRIDGE.md",
+    "_comment": "Mihomo 代理桥（一号一 IP）。enabled=true 后 ds2api 启动时自动拉起 mihomo 子进程；推荐在 WebUI「代理桥」页管理订阅与账号绑定。订阅与端口映射改由与 config.json 同目录的 mihomo_subscriptions.json 独立存放（旧版写在 config.json 中的 subscriptions/port_map 仍可读取，下次保存时自动迁移）。mihomo 二进制缺失时可在「代理桥」页一键下载到根目录。详见 docs/MIHOMO_BRIDGE.md",
     "enabled": false,
     "binary_path": "",
     "base_port": 10801,
-    "api_port": 19090,
-    "subscriptions": [],
-    "port_map": {}
+    "api_port": 19090
   }
 }

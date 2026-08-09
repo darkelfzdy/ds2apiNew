@@ -42,6 +42,9 @@ type Manager struct {
 	binary      string
 	listenPorts []int
 	applying    bool // 串行化 Apply，避免并发重启竞争
+
+	dlMu sync.Mutex
+	dl   downloadState // 内核下载任务状态（独立锁，避免阻塞主状态锁）
 }
 
 func NewManager(store *config.Store, pool PoolResetter) *Manager {
@@ -221,6 +224,8 @@ func (m *Manager) Status() map[string]any {
 		"pid":           pid,
 		"binary":        binary,
 		"binary_path":   cfg.Mihomo.BinaryPath,
+		"binary_found":  detectBinary(cfg.Mihomo.BinaryPath),
+		"download":      m.DownloadInfo(),
 		"work_dir":      WorkDir(),
 		"base_port":     cfg.Mihomo.BasePort,
 		"api_port":      cfg.Mihomo.APIPort,
@@ -230,6 +235,12 @@ func (m *Manager) Status() map[string]any {
 		"listeners":     listeners,
 		"subscriptions": len(cfg.Mihomo.Subscriptions),
 	}
+}
+
+// detectBinary 判断按给定配置能否解析到 mihomo 可执行文件。
+func detectBinary(configured string) bool {
+	_, err := resolveBinary(configured)
+	return err == nil
 }
 
 func (m *Manager) setLastErr(msg string) {

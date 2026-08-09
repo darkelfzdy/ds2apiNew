@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { AlertTriangle, Loader2, Power, RefreshCw } from 'lucide-react'
+import { AlertTriangle, Download, Loader2, Power, RefreshCw } from 'lucide-react'
 import clsx from 'clsx'
 
 import { useI18n } from '../../i18n'
@@ -39,7 +39,7 @@ function InfoRow({ label, value, mono = true }) {
     )
 }
 
-export default function MihomoStatusCard({ status, busy, onSaveSettings, onApply }) {
+export default function MihomoStatusCard({ status, busy, onSaveSettings, onApply, onDownloadBinary }) {
     const { t } = useI18n()
     const [form, setForm] = useState({ enabled: false, binary_path: '', base_port: 0, api_port: 0 })
 
@@ -55,6 +55,10 @@ export default function MihomoStatusCard({ status, busy, onSaveSettings, onApply
 
     const saving = Boolean(busy?.settings)
     const applying = Boolean(busy?.apply)
+    const downloading = Boolean(busy?.binary)
+    const binaryFound = Boolean(status?.binary_found)
+    const download = status?.download || {}
+    const downloadProgress = download.progress || 0
     const startedAt = status?.started_at > 0 ? new Date(status.started_at * 1000).toLocaleString() : ''
 
     return (
@@ -67,6 +71,19 @@ export default function MihomoStatusCard({ status, busy, onSaveSettings, onApply
                     </div>
                     <p className="text-sm text-muted-foreground mt-1">{t('mihomoBridge.statusDesc')}</p>
                 </div>
+                {!binaryFound && (
+                    <button
+                        onClick={onDownloadBinary}
+                        disabled={downloading || !status?.supported}
+                        className="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors font-medium text-sm disabled:opacity-50"
+                        title={t('mihomoBridge.downloadHint')}
+                    >
+                        {downloading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                        {downloading
+                            ? t('mihomoBridge.downloading', { progress: downloadProgress })
+                            : t('mihomoBridge.downloadAction')}
+                    </button>
+                )}
                 <button
                     onClick={onApply}
                     disabled={applying || !status?.supported}
@@ -139,6 +156,16 @@ export default function MihomoStatusCard({ status, busy, onSaveSettings, onApply
                             <span className="text-xs text-amber-500">{t('mihomoBridge.confirmEnableHint')}</span>
                         )}
                     </div>
+
+                    {download.state === 'error' && download.error && (
+                        <div className="rounded-lg border border-destructive/25 bg-destructive/10 px-3 py-2 text-xs text-destructive flex items-start gap-2">
+                            <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                            <div>
+                                <div className="font-semibold">{t('mihomoBridge.downloadError')}</div>
+                                <div className="mt-0.5 break-all">{download.error}</div>
+                            </div>
+                        </div>
+                    )}
 
                     {status?.last_error && (
                         <div className="rounded-lg border border-destructive/25 bg-destructive/10 px-3 py-2 text-xs text-destructive flex items-start gap-2">

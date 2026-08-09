@@ -7,6 +7,7 @@ export default function useMihomoBridge({ authFetch, onMessage, onConfigChanged,
     const [status, setStatus] = useState(null)
     const [subscriptions, setSubscriptions] = useState([])
     const [nodes, setNodes] = useState([])
+    const [latency, setLatency] = useState({})
     const [loading, setLoading] = useState(true)
     const [busy, setBusy] = useState({})
 
@@ -110,6 +111,43 @@ export default function useMihomoBridge({ authFetch, onMessage, onConfigChanged,
         return true
     }), [apiFetch, withBusy, readApiResponse, report, t])
 
+    // pollDownloadFinished 轮询 /admin/mihomo/binary 直到下载完成/失败。
+    const pollDownloadFinished = useCallback(async () => {
+        const deadline = Date.now() + 10 * 60 * 1000
+        while (Date.now() < deadline) {
+            await new Promise(resolve => setTimeout(resolve, 2000))
+            let info = {}
+            try {
+                const res = await apiFetch('/admin/mihomo/binary')
+                info = await readApiResponse(res)
+            } catch (_err) {
+                continue
+            }
+            if (info?.state === 'done') {
+                return true
+            }
+            if (info?.state === 'error') {
+                onMessage('error', info.error || t('mihomoBridge.downloadFailed'))
+                return false
+            }
+            setStatus(prev => (prev ? { ...prev, download: info, binary_found: Boolean(info.found) } : prev))
+        }
+        onMessage('error', t('mihomoBridge.downloadTimeout'))
+        return false
+    }, [apiFetch, readApiResponse, onMessage, t])
+
+    const downloadBinary = useCallback(() => withBusy('binary', async () => {
+        const res = await apiFetch('/admin/mihomo/binary/download', { method: 'POST' })
+        const data = await readApiResponse(res)
+        if (!report(res, data, t('mihomoBridge.downloadStarted'))) return false
+        const ok = await pollDownloadFinished()
+        if (ok) {
+            onMessage('success', t('mihomoBridge.downloadSuccess'))
+        }
+        await loadStatus()
+        return ok
+    }), [withBusy, apiFetch, readApiResponse, report, t, pollDownloadFinished, loadStatus, onMessage])
+
     const addSubscription = useCallback((name, url) => withBusy('addSub', async () => {
         const res = await apiFetch('/admin/mihomo/subscriptions', {
             method: 'POST',
@@ -156,11 +194,58 @@ export default function useMihomoBridge({ authFetch, onMessage, onConfigChanged,
         return true
     }), [apiFetch, withBusy, readApiResponse, report, t, loadNodes, loadStatus, onConfigChanged])
 
+    // testLatency 批量测试全部节点延迟（后端按每批最多 60 并发执行），
+    // 结果存进 latency（node_key -> {delay_ms, error}），供列表排序与展示。
+    const testLatency = useCallback(() => withBusy('delayTest', async () => {
+        const res = await apiFetch('/admin/mihomo/delay-test', { method: 'POST' })
+        const data = await readApiResponse(res)
+        if (!report(res, data, t('mihomoBridge.latencyTestDone', { total: data.total ?? 0 }))) return false
+        const map = {}
+        for (const item of data.items || []) {
+            map[item.node_key] = { delay_ms: item.delay_ms, error: item.error }
+        }
+        setLatency(map)
+        return true
+    }), [apiFetch, withBusy, readApiResponse, report, t])
+
+    // assignAll 一键为全部账号分配节点绑定：已测过延迟时只用测试成功的节点
+    // （按延迟升序，超时/失败的节点不绑定）；未测过则全部节点按原顺序。
+    // 节点不足时后端循环分配。返回绑定是否成功。
+    const assignAll = useCallback(() => {
+        const hasLatency = latency && Object.keys(latency).length > 0
+        let ordered = nodes
+        if (hasLatency) {
+            ordered = nodes
+                .filter(n => {
+                    const l = latency[n.node_key]
+                    return Boolean(l && !l.error && l.delay_ms > 0)
+                })
+                .sort((a, b) => (latency[a.node_key].delay_ms || 0) - (latency[b.node_key].delay_ms || 0))
+        }
+        const nodeKeys = ordered.map(n => n.node_key)
+        if (nodeKeys.length === 0) {
+            onMessage('error', t('mihomoBridge.assignNoNodes'))
+            return Promise.resolve(false)
+        }
+        return withBusy('assignAll', async () => {
+            const res = await apiFetch('/admin/mihomo/assign', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ node_keys: nodeKeys }),
+            })
+            const data = await readApiResponse(res)
+            if (!report(res, data, t('mihomoBridge.assignAllSuccess', { count: data.bound ?? 0 }))) return false
+            await Promise.all([loadNodes(), loadStatus()])
+            await onConfigChanged?.()
+            return true
+        })
+    }, [nodes, latency, apiFetch, withBusy, readApiResponse, report, t, loadNodes, loadStatus, onConfigChanged, onMessage])
+
     return {
-        status, subscriptions, nodes, loading, busy,
+        status, subscriptions, nodes, latency, loading, busy,
         reload: loadAll,
-        saveSettings, applyNow,
+        saveSettings, applyNow, downloadBinary,
         addSubscription, refreshSubscription, deleteSubscription,
-        bindAccount,
+        bindAccount, testLatency, assignAll,
     }
 }

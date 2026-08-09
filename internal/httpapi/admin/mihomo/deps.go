@@ -20,6 +20,10 @@ type Bridge interface {
 	DeleteSubscription(ctx context.Context, subID string) error
 	UpdateSettings(ctx context.Context, enabled bool, binaryPath string, basePort, apiPort int) error
 	ListNodes() []map[string]any
+	TestLatency(ctx context.Context) ([]map[string]any, error)
+	AssignAccounts(ctx context.Context, nodeKeys []string) (int, error)
+	DownloadInfo() map[string]any
+	StartBinaryDownload(ctx context.Context) error
 }
 
 type Handler struct {

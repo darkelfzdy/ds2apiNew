@@ -151,6 +151,73 @@ func (m *Manager) BindAccount(_ context.Context, identifier, nodeKey string) err
 	return m.Apply(context.Background())
 }
 
+// AssignAccounts 一键为全部账号分配节点绑定：账号按配置顺序从上到下依次
+// 绑定到传入的节点列表（尽量保证每个节点只绑定一个账号，账号多于节点时
+// 循环从头再来）。已存在的 mihomo 托管绑定会先全部解除再按新分配重建，
+// 最终在单次事务 + 单次 Apply 内完成。返回实际绑定数。
+func (m *Manager) AssignAccounts(_ context.Context, nodeKeys []string) (int, error) {
+	if m == nil || m.store == nil {
+		return 0, errors.New("mihomo manager 未初始化")
+	}
+	clean := make([]string, 0, len(nodeKeys))
+	seen := map[string]struct{}{}
+	for _, key := range nodeKeys {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		clean = append(clean, key)
+	}
+	nodeKeys = clean
+	if len(nodeKeys) == 0 {
+		return 0, errors.New("没有可用的节点：请先添加订阅；若已测延迟请确认存在测试成功的节点")
+	}
+
+	bound := 0
+	err := m.store.Update(func(c *config.Config) error {
+		for _, key := range nodeKeys {
+			if _, ok := c.Mihomo.FindMihomoNode(key); !ok {
+				return fmt.Errorf("节点不存在（订阅可能已被删除），请刷新节点列表后重试: %s", key)
+			}
+		}
+		// 先解除全部 mihomo 托管绑定，避免残留旧绑定。
+		for i := range c.Accounts {
+			if config.IsMihomoManagedProxyID(strings.TrimSpace(c.Accounts[i].ProxyID)) {
+				c.Accounts[i].ProxyID = ""
+			}
+		}
+		gcLocked(c)
+		// 按节点列表从上到下循环分配。
+		idx := 0
+		for i := range c.Accounts {
+			if c.Accounts[i].Identifier() == "" {
+				continue
+			}
+			nodeKey := nodeKeys[idx%len(nodeKeys)]
+			idx++
+			node, ok := c.Mihomo.FindMihomoNode(nodeKey)
+			if !ok {
+				continue
+			}
+			port := c.Mihomo.AllocateMihomoPort(nodeKey)
+			proxy := upsertManagedProxyLocked(c, nodeKey, node.Name, port)
+			c.Accounts[i].ProxyID = proxy.ID
+			bound++
+		}
+		gcLocked(c)
+		return validateMutation(c)
+	})
+	if err != nil {
+		return 0, err
+	}
+	m.resetPool()
+	return bound, m.Apply(context.Background())
+}
+
 // AddSubscription 抓取并保存一个新订阅，返回订阅 ID。
 func (m *Manager) AddSubscription(ctx context.Context, name, rawURL string) (config.MihomoSubscription, error) {
 	if m == nil || m.store == nil {

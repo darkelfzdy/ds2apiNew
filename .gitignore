@@ -73,6 +73,7 @@ data/
 /mihomo
 /mihomo.exe
 /bin/mihomo*
+mihomo_subscriptions.json
 
 # Local release/test packages
 dist/

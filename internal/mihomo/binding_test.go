@@ -245,3 +245,94 @@ func TestListNodesReportsBinding(t *testing.T) {
 		t.Fatalf("bound accounts mismatch: %v", hk["accounts"])
 	}
 }
+
+func proxyIDOf(t *testing.T, store *config.Store, email string) string {
+	t.Helper()
+	for _, acc := range store.Snapshot().Accounts {
+		if acc.Email == email {
+			return acc.ProxyID
+		}
+	}
+	t.Fatalf("account %s not found", email)
+	return ""
+}
+
+func TestAssignAccountsOnePerNode(t *testing.T) {
+	store := newBindingTestStore(t)
+	mgr := NewManager(store, nil)
+	hk := config.MihomoNodeKey("sub-1", "香港 01")
+	jp := config.MihomoNodeKey("sub-1", "日本 01")
+
+	bound, err := mgr.AssignAccounts(context.Background(), []string{jp, hk})
+	if err != nil {
+		t.Fatalf("assign failed: %v", err)
+	}
+	if bound != 2 {
+		t.Fatalf("expected 2 bound, got %d", bound)
+	}
+	pa := proxyIDOf(t, store, "a@test.com")
+	pb := proxyIDOf(t, store, "b@test.com")
+	if pa != config.MihomoManagedProxyID(jp) || pb != config.MihomoManagedProxyID(hk) {
+		t.Fatalf("unexpected assignment: a=%s b=%s", pa, pb)
+	}
+	snap := store.Snapshot()
+	if snap.Mihomo.PortMap[jp] != config.DefaultMihomoBasePort || snap.Mihomo.PortMap[hk] != config.DefaultMihomoBasePort+1 {
+		t.Fatalf("port allocation mismatch: %v", snap.Mihomo.PortMap)
+	}
+}
+
+func TestAssignAccountsCyclesWhenAccountsExceedNodes(t *testing.T) {
+	store := newBindingTestStore(t)
+	mgr := NewManager(store, nil)
+	if err := store.Update(func(c *config.Config) error {
+		c.Accounts = append(c.Accounts, config.Account{Email: "c@test.com", Password: "x"})
+		return nil
+	}); err != nil {
+		t.Fatalf("seed account failed: %v", err)
+	}
+	hk := config.MihomoNodeKey("sub-1", "香港 01")
+	jp := config.MihomoNodeKey("sub-1", "日本 01")
+
+	bound, err := mgr.AssignAccounts(context.Background(), []string{jp, hk})
+	if err != nil {
+		t.Fatalf("assign failed: %v", err)
+	}
+	if bound != 3 {
+		t.Fatalf("expected 3 bound, got %d", bound)
+	}
+	pa := proxyIDOf(t, store, "a@test.com")
+	pb := proxyIDOf(t, store, "b@test.com")
+	pc := proxyIDOf(t, store, "c@test.com")
+	if pa != config.MihomoManagedProxyID(jp) || pb != config.MihomoManagedProxyID(hk) || pc != config.MihomoManagedProxyID(jp) {
+		t.Fatalf("unexpected cycling assignment: a=%s b=%s c=%s", pa, pb, pc)
+	}
+}
+
+func TestAssignAccountsReplacesOldBindings(t *testing.T) {
+	store := newBindingTestStore(t)
+	mgr := NewManager(store, nil)
+	jp := config.MihomoNodeKey("sub-1", "日本 01")
+	if err := mgr.BindAccount(context.Background(), "a@test.com", jp); err != nil {
+		t.Fatalf("pre-bind failed: %v", err)
+	}
+	hk := config.MihomoNodeKey("sub-1", "香港 01")
+	if _, err := mgr.AssignAccounts(context.Background(), []string{hk, jp}); err != nil {
+		t.Fatalf("assign failed: %v", err)
+	}
+	pa := proxyIDOf(t, store, "a@test.com")
+	pb := proxyIDOf(t, store, "b@test.com")
+	if pa != config.MihomoManagedProxyID(hk) || pb != config.MihomoManagedProxyID(jp) {
+		t.Fatalf("old binding not replaced: a=%s b=%s", pa, pb)
+	}
+}
+
+func TestAssignAccountsRejectsEmptyNodes(t *testing.T) {
+	store := newBindingTestStore(t)
+	mgr := NewManager(store, nil)
+	if _, err := mgr.AssignAccounts(context.Background(), nil); err == nil {
+		t.Fatal("expected error for empty node list")
+	}
+	if _, err := mgr.AssignAccounts(context.Background(), []string{"sub-1::不存在"}); err == nil {
+		t.Fatal("expected error for unknown node key")
+	}
+}

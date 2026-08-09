@@ -28,6 +28,11 @@ export default function MihomoBridgeContainer({ config, onRefresh, onMessage, au
         bridge.deleteSubscription(sub.id)
     }
 
+    const confirmAssignAll = () => {
+        if (!confirm(t('mihomoBridge.assignAllConfirm'))) return
+        bridge.assignAll()
+    }
+
     return (
         <div className="space-y-6">
             <MihomoStatusCard
@@ -35,6 +40,7 @@ export default function MihomoBridgeContainer({ config, onRefresh, onMessage, au
                 busy={bridge.busy}
                 onSaveSettings={bridge.saveSettings}
                 onApply={bridge.applyNow}
+                onDownloadBinary={bridge.downloadBinary}
             />
 
             <MihomoSubscriptions
@@ -47,10 +53,16 @@ export default function MihomoBridgeContainer({ config, onRefresh, onMessage, au
 
             <MihomoNodesTable
                 nodes={bridge.nodes}
+                latency={bridge.latency}
                 accounts={config?.accounts || []}
                 busy={bridge.busy}
+                canTest={Boolean(bridge.status?.running)}
+                testing={Boolean(bridge.busy?.delayTest)}
+                assigning={Boolean(bridge.busy?.assignAll)}
                 onBind={bridge.bindAccount}
                 onUnbind={(identifier) => bridge.bindAccount(identifier, '')}
+                onTestLatency={bridge.testLatency}
+                onAssignAll={confirmAssignAll}
             />
         </div>
     )

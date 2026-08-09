@@ -45,6 +45,10 @@ func LoadStoreWithError() (*Store, error) {
 func loadStore() (*Store, error) {
 	cfg, fromEnv, err := loadConfig()
 	cfg.NormalizeCredentials()
+	if subErr := loadMihomoSubscriptionsFile(&cfg); subErr != nil {
+		// 独立订阅文件损坏时仅告警，不影响配置加载（保留 config.json 旧式订阅）。
+		Logger.Warn("[config] load mihomo subscriptions file failed", "path", MihomoSubscriptionsPath(), "error", subErr)
+	}
 	if validateErr := ValidateConfig(cfg); validateErr != nil {
 		err = errors.Join(err, validateErr)
 	}
@@ -260,6 +264,9 @@ func (s *Store) Save() error {
 	}
 	persistCfg := s.cfg.Clone()
 	persistCfg.ClearAccountTokens()
+	if err := saveMihomoSubscriptionsFile(persistCfg.Mihomo); err != nil {
+		return err
+	}
 	b, err := json.MarshalIndent(persistCfg, "", "  ")
 	if err != nil {
 		return err
@@ -278,6 +285,9 @@ func (s *Store) saveLocked() error {
 	}
 	persistCfg := s.cfg.Clone()
 	persistCfg.ClearAccountTokens()
+	if err := saveMihomoSubscriptionsFile(persistCfg.Mihomo); err != nil {
+		return err
+	}
 	b, err := json.MarshalIndent(persistCfg, "", "  ")
 	if err != nil {
 		return err

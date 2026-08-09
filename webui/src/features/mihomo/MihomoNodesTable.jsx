@@ -1,4 +1,5 @@
-import { Link2, Loader2, X } from 'lucide-react'
+import { useMemo } from 'react'
+import { Gauge, Link2, Loader2, UserCheck, X } from 'lucide-react'
 import clsx from 'clsx'
 
 import { useI18n } from '../../i18n'
@@ -31,7 +32,26 @@ function PortBadge({ t, port }) {
     )
 }
 
-function NodeRow({ t, node, options, busy, onBind, onUnbind }) {
+function LatencyBadge({ t, latency }) {
+    if (!latency) return null
+    if (latency.error) {
+        return (
+            <span
+                className="inline-flex items-center rounded-full border border-red-500/25 bg-red-500/10 px-2 py-1 text-[10px] font-medium text-red-500"
+                title={latency.error}
+            >
+                {t('mihomoBridge.latencyFailed')}
+            </span>
+        )
+    }
+    return (
+        <span className="inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-1 text-[10px] font-mono font-medium text-emerald-500">
+            {latency.delay_ms} ms
+        </span>
+    )
+}
+
+function NodeRow({ t, node, latency, options, busy, onBind, onUnbind }) {
     const bound = Array.isArray(node.accounts) ? node.accounts : []
     const boundIds = new Set(bound.map(acc => acc.identifier))
     const candidates = options.filter(opt => !boundIds.has(opt.identifier))
@@ -47,6 +67,7 @@ function NodeRow({ t, node, options, busy, onBind, onUnbind }) {
                             {node.type || '?'}
                         </span>
                         <PortBadge t={t} port={node.local_port} />
+                        <LatencyBadge t={t} latency={latency} />
                     </div>
                     <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                         {node.server && (
@@ -109,26 +130,71 @@ function NodeRow({ t, node, options, busy, onBind, onUnbind }) {
     )
 }
 
-export default function MihomoNodesTable({ nodes, accounts, busy, onBind, onUnbind }) {
+export default function MihomoNodesTable({ nodes, latency, accounts, busy, canTest, testing, assigning, onBind, onUnbind, onTestLatency, onAssignAll }) {
     const { t } = useI18n()
     const options = accountOptions(accounts)
 
+    // 测过延迟后按延迟升序展示：成功项在前（按 delay_ms），失败/未测项保持原序垫底。
+    // 未测延迟时：已绑定账号的节点排到最前，让绑定情况一眼可见（绑定可由账号反推）。
+    const sortedNodes = useMemo(() => {
+        const withLatency = latency && Object.keys(latency).length > 0
+        if (withLatency) {
+            return [...nodes].sort((a, b) => {
+                const la = latency[a.node_key]
+                const lb = latency[b.node_key]
+                const aOk = Boolean(la && !la.error && la.delay_ms > 0)
+                const bOk = Boolean(lb && !lb.error && lb.delay_ms > 0)
+                if (aOk !== bOk) return aOk ? -1 : 1
+                if (aOk && bOk) return la.delay_ms - lb.delay_ms
+                return 0
+            })
+        }
+        return [...nodes].sort((a, b) => {
+            const aBound = Array.isArray(a.accounts) && a.accounts.length > 0
+            const bBound = Array.isArray(b.accounts) && b.accounts.length > 0
+            if (aBound !== bBound) return aBound ? -1 : 1
+            return 0
+        })
+    }, [nodes, latency])
+
     return (
         <div className="bg-card border border-border rounded-xl overflow-hidden shadow-sm">
-            <div className="p-6 border-b border-border">
-                <h2 className="text-lg font-semibold">{t('mihomoBridge.nodesTitle')}</h2>
-                <p className="text-sm text-muted-foreground mt-1">{t('mihomoBridge.nodesDesc')}</p>
+            <div className="p-6 border-b border-border flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div>
+                    <h2 className="text-lg font-semibold">{t('mihomoBridge.nodesTitle')}</h2>
+                    <p className="text-sm text-muted-foreground mt-1">{t('mihomoBridge.nodesDesc')}</p>
+                </div>
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 shrink-0">
+                    <button
+                        onClick={onAssignAll}
+                        disabled={assigning || testing || nodes.length === 0}
+                        className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors font-medium text-sm shadow-sm disabled:opacity-50"
+                    >
+                        {assigning ? <Loader2 className="w-4 h-4 animate-spin" /> : <UserCheck className="w-4 h-4" />}
+                        {assigning ? t('mihomoBridge.assigningAll') : t('mihomoBridge.assignAll')}
+                    </button>
+                    <button
+                        onClick={onTestLatency}
+                        disabled={testing || assigning || !canTest || nodes.length === 0}
+                        className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg border border-border hover:bg-secondary transition-colors font-medium text-sm disabled:opacity-50"
+                        title={!canTest ? t('mihomoBridge.latencyTestDisabledHint') : ''}
+                    >
+                        {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Gauge className="w-4 h-4" />}
+                        {testing ? t('mihomoBridge.testingLatency') : t('mihomoBridge.testLatency')}
+                    </button>
+                </div>
             </div>
 
             {nodes.length === 0 ? (
                 <div className="p-10 text-center text-muted-foreground">{t('mihomoBridge.noNodes')}</div>
             ) : (
                 <div className="divide-y divide-border">
-                    {nodes.map(node => (
+                    {sortedNodes.map(node => (
                         <NodeRow
                             key={node.node_key}
                             t={t}
                             node={node}
+                            latency={latency?.[node.node_key]}
                             options={options}
                             busy={busy}
                             onBind={onBind}

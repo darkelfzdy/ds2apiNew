@@ -3,6 +3,7 @@ package config
 import (
 	"crypto/sha1"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -45,6 +46,26 @@ type MihomoNode struct {
 	Name string         `json:"name"`
 	Type string         `json:"type"`
 	Raw  map[string]any `json:"raw,omitempty"`
+}
+
+// MarshalJSON 序列化 Mihomo 配置时剔除订阅与端口映射：
+// 这两部分状态改由 mihomo_subscriptions.json 独立持久化，
+// config.json 中只保留开关/二进制路径/端口等轻量设置。
+// UnmarshalJSON 仍按字段读取，保证旧版 config.json 中
+// 的 subscriptions/port_map 兼容（下次保存时自动迁移）。
+func (m MihomoConfig) MarshalJSON() ([]byte, error) {
+	aux := struct {
+		Enabled    bool   `json:"enabled,omitempty"`
+		BinaryPath string `json:"binary_path,omitempty"`
+		BasePort   int    `json:"base_port,omitempty"`
+		APIPort    int    `json:"api_port,omitempty"`
+	}{
+		Enabled:    m.Enabled,
+		BinaryPath: m.BinaryPath,
+		BasePort:   m.BasePort,
+		APIPort:    m.APIPort,
+	}
+	return json.Marshal(aux)
 }
 
 // NormalizeMihomoConfig 填充默认值并修剪空白。默认端口不视为“已配置”，

@@ -39,9 +39,9 @@ func effectiveAdminKey(store AdminConfigReader) string {
 		return v
 	}
 	warnOnce.Do(func() {
-		slog.Warn("⚠️  DS2API_ADMIN_KEY is not set! Using insecure default \"admin\". Set a strong key in production!")
+		slog.Warn("DS2API_ADMIN_KEY is not set and no admin password hash is configured; admin credential authentication is disabled")
 	})
-	return "admin"
+	return ""
 }
 
 func jwtSecret(store AdminConfigReader) string {
@@ -75,6 +75,9 @@ func CreateJWT(expireHours int) (string, error) {
 }
 
 func CreateJWTWithStore(expireHours int, store AdminConfigReader) (string, error) {
+	if strings.TrimSpace(jwtSecret(store)) == "" {
+		return "", errors.New("jwt signing secret is not configured")
+	}
 	if expireHours <= 0 {
 		expireHours = jwtExpireHours(store)
 	}
@@ -103,6 +106,9 @@ func VerifyJWT(token string) (map[string]any, error) {
 }
 
 func VerifyJWTWithStore(token string, store AdminConfigReader) (map[string]any, error) {
+	if strings.TrimSpace(jwtSecret(store)) == "" {
+		return nil, errors.New("jwt signing secret is not configured")
+	}
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		return nil, errors.New("invalid token format")

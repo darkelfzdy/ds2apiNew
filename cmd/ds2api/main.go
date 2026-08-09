@@ -70,7 +70,11 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if err := srv.Shutdown(ctx); err != nil {
+	shutdownErr := srv.Shutdown(ctx)
+	// Release pooled upstream/proxy connections after the HTTP server stops
+	// accepting work, so graceful shutdown does not leak transport resources.
+	app.DS.Close()
+	if err := shutdownErr; err != nil {
 		config.Logger.Error("graceful shutdown failed, forcing exit", "error", err)
 		os.Exit(1)
 	}

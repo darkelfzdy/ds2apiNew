@@ -23,6 +23,28 @@ type fakeDoer struct {
 
 func (f fakeDoer) Do(req *http.Request) (*http.Response, error) { return f.fn(req) }
 
+type closeTrackingDoer struct {
+	fakeDoer
+	closed int
+}
+
+func (d *closeTrackingDoer) CloseIdleConnections() { d.closed++ }
+
+func TestWireDoerClosesInnerIdleConnections(t *testing.T) {
+	inner := &closeTrackingDoer{fakeDoer: fakeDoer{fn: func(*http.Request) (*http.Response, error) {
+		return nil, nil
+	}}}
+	doer := newWireDoer(inner, newCookieJar())
+	closer, ok := doer.(interface{ CloseIdleConnections() })
+	if !ok {
+		t.Fatal("expected wire doer to expose idle connection cleanup")
+	}
+	closer.CloseIdleConnections()
+	if inner.closed != 1 {
+		t.Fatalf("expected inner cleanup once, got %d", inner.closed)
+	}
+}
+
 func ctxForAccount(id string) context.Context {
 	return auth.WithAuth(context.Background(), &auth.RequestAuth{
 		AccountID: id,

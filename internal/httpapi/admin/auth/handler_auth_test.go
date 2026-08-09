@@ -138,6 +138,7 @@ func TestRequireAdminReturns401ForPOSTEvenWithTextHTMLAccept(t *testing.T) {
 
 func TestRequireAdminDoesNotFallbackWhenAuthorizationPresent(t *testing.T) {
 	t.Setenv("DS2API_CONFIG_JSON", `{"keys":["k1"],"accounts":[]}`)
+	t.Setenv("DS2API_ADMIN_KEY", "test-admin-key")
 
 	token, err := authn.CreateJWT(1)
 	if err != nil {

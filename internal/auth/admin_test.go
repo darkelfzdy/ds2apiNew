@@ -8,6 +8,7 @@ import (
 )
 
 func TestJWTCreateVerify(t *testing.T) {
+	t.Setenv("DS2API_ADMIN_KEY", "test-admin-key")
 	token, err := CreateJWT(1)
 	if err != nil {
 		t.Fatalf("create jwt failed: %v", err)
@@ -22,6 +23,7 @@ func TestJWTCreateVerify(t *testing.T) {
 }
 
 func TestVerifyAdminRequest(t *testing.T) {
+	t.Setenv("DS2API_ADMIN_KEY", "test-admin-key")
 	token, _ := CreateJWT(1)
 	req, _ := http.NewRequest(http.MethodGet, "/admin/config", nil)
 	req.Header.Set("Authorization", "Bearer "+token)

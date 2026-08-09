@@ -87,6 +87,14 @@ func (d *httpCloakDoer) Do(req *http.Request) (*http.Response, error) {
 	return fromHTTPCloakResponse(resp, req)
 }
 
+// CloseIdleConnections releases pooled httpcloak connections when an account
+// proxy or client bundle is replaced.
+func (d *httpCloakDoer) CloseIdleConnections() {
+	if d != nil && d.client != nil {
+		d.client.Close()
+	}
+}
+
 func toHTTPCloakRequest(req *http.Request) *httpcloak.Request {
 	headers := make(map[string][]string, len(req.Header))
 	for key, values := range req.Header {

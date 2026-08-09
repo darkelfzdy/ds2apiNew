@@ -39,10 +39,51 @@ func writeConfigFile(path string, cfg Config) error {
 func writeConfigBytes(path string, b []byte) error {
 	dir := filepath.Dir(path)
 	if dir == "." || dir == "" {
-		return os.WriteFile(path, b, 0o644)
+		dir = "."
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("mkdir config dir: %w", err)
 	}
-	return os.WriteFile(path, b, 0o644)
+	tmp, err := os.CreateTemp(dir, ".config-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create config temp file: %w", err)
+	}
+	tmpName := tmp.Name()
+	cleanup := func(cause error) error {
+		if removeErr := os.Remove(tmpName); removeErr != nil && !os.IsNotExist(removeErr) {
+			return fmt.Errorf("%w; remove config temp file: %v", cause, removeErr)
+		}
+		return cause
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		closeErr := tmp.Close()
+		if closeErr != nil {
+			err = fmt.Errorf("%w; close config temp file: %v", err, closeErr)
+		}
+		return cleanup(fmt.Errorf("chmod config temp file: %w", err))
+	}
+	if _, err := tmp.Write(b); err != nil {
+		closeErr := tmp.Close()
+		if closeErr != nil {
+			err = fmt.Errorf("%w; close config temp file: %v", err, closeErr)
+		}
+		return cleanup(fmt.Errorf("write config temp file: %w", err))
+	}
+	if err := tmp.Sync(); err != nil {
+		closeErr := tmp.Close()
+		if closeErr != nil {
+			err = fmt.Errorf("%w; close config temp file: %v", err, closeErr)
+		}
+		return cleanup(fmt.Errorf("sync config temp file: %w", err))
+	}
+	if err := tmp.Close(); err != nil {
+		return cleanup(fmt.Errorf("close config temp file: %w", err))
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return cleanup(fmt.Errorf("replace config file: %w", err))
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		return fmt.Errorf("chmod config file: %w", err)
+	}
+	return nil
 }

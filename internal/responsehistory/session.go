@@ -23,6 +23,12 @@ type Session struct {
 	disabled    bool
 }
 
+const progressPersistInterval = time.Second
+
+func progressPersistDue(now, last time.Time) bool {
+	return last.IsZero() || now.Sub(last) >= progressPersistInterval
+}
+
 type StartParams struct {
 	Store    *chathistory.Store
 	Request  *http.Request
@@ -122,7 +128,7 @@ func (s *Session) Progress(thinking, content string) {
 		return
 	}
 	now := time.Now()
-	if now.Sub(s.lastPersist) < 250*time.Millisecond {
+	if !progressPersistDue(now, s.lastPersist) {
 		return
 	}
 	s.lastPersist = now

@@ -60,16 +60,16 @@ func TestBuildResponseObjectReasoningOnlyFallsBackToOutputText(t *testing.T) {
 		t.Fatalf("expected one output item, got %#v", obj["output"])
 	}
 	first, _ := output[0].(map[string]any)
-	if first["type"] != "message" {
-		t.Fatalf("expected output type message, got %#v", first["type"])
+	if first["type"] != "reasoning" {
+		t.Fatalf("expected output type reasoning, got %#v", first["type"])
 	}
 	content, _ := first["content"].([]any)
 	if len(content) == 0 {
 		t.Fatalf("expected reasoning content, got %#v", first["content"])
 	}
 	block0, _ := content[0].(map[string]any)
-	if block0["type"] != "reasoning" {
-		t.Fatalf("expected first content block reasoning, got %#v", block0["type"])
+	if block0["type"] != "reasoning_text" {
+		t.Fatalf("expected first content block reasoning_text, got %#v", block0["type"])
 	}
 }
 
@@ -86,19 +86,19 @@ func TestBuildResponseObjectPromotesToolCallFromThinkingWhenTextEmpty(t *testing
 
 	output, _ := obj["output"].([]any)
 	if len(output) != 2 {
-		t.Fatalf("expected reasoning message plus function_call output, got %#v", obj["output"])
+		t.Fatalf("expected reasoning plus function_call output, got %#v", obj["output"])
 	}
 	first, _ := output[0].(map[string]any)
-	if first["type"] != "message" {
-		t.Fatalf("expected reasoning message output first, got %#v", first["type"])
+	if first["type"] != "reasoning" {
+		t.Fatalf("expected reasoning output first, got %#v", first["type"])
 	}
 	content, _ := first["content"].([]any)
 	if len(content) != 1 {
 		t.Fatalf("expected reasoning content, got %#v", first["content"])
 	}
 	block0, _ := content[0].(map[string]any)
-	if block0["type"] != "reasoning" {
-		t.Fatalf("expected reasoning block, got %#v", block0["type"])
+	if block0["type"] != "reasoning_text" {
+		t.Fatalf("expected reasoning_text block, got %#v", block0["type"])
 	}
 	second, _ := output[1].(map[string]any)
 	if second["type"] != "function_call" {

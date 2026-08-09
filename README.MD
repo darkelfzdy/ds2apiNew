@@ -15,6 +15,7 @@
 ![Forks](https://img.shields.io/github/forks/t479842598/ds2apiNew.svg)
 [![Docker](https://img.shields.io/badge/docker-ready-blue.svg)](docs/DEPLOY.md)
 
+[![Deploy on Zeabur](https://zeabur.com/button.svg)](https://zeabur.com/templates/L4CFHP)
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/t479842598/ds2apiNew)
 
 将 DeepSeek Web 对话能力转换为 OpenAI、Claude 与 Gemini 兼容 API。核心后端以 **Go** 实现，Vercel 流式桥接额外使用少量 Node Runtime，前端为 React WebUI 管理台（源码在 `webui/`，部署时自动构建到 `static/admin`）。
@@ -83,7 +84,7 @@ flowchart LR
             DSClient["DeepSeek Client\n(Session / Auth / Completion / Files)"]
             Pow["PoW 实现\n(纯 Go)"]
             Tool["Tool Sieve\n(Go/Node 语义对齐)"]
-            History["Current Input File\n(DS2API_HISTORY.txt)"]
+            History["Current Input File\n(HISTORY.txt)"]
         end
     end
 
@@ -332,7 +333,7 @@ go run ./cmd/ds2api
 - `model_aliases`：OpenAI / Claude / Gemini 共用的模型 alias 映射。
 - `runtime`：账号并发、队列与 token 刷新策略，可通过 Admin Settings 热更新。
 - `auto_delete.mode`：请求结束后的远端会话清理策略，支持 `none` / `single` / `all`。
-- `current_input_file`：全局生效的上下文拆分上传策略；默认关闭，开启且阈值为 `0` 时，触发时将完整上下文合并上传为 `DS2API_HISTORY.txt` 上下文文件。expert（pro）模型不支持文件上传，即使开启此选项也不会生成 `DS2API_HISTORY.txt`，客户端传入的文件引用也会被忽略。
+- `current_input_file`：全局生效的上下文拆分上传策略；默认关闭，开启且阈值为 `0` 时，触发时将完整上下文合并上传为 `HISTORY.txt` 上下文文件。expert（pro）模型不支持文件上传，即使开启此选项也不会生成 `HISTORY.txt`，客户端传入的文件引用也会被忽略。
 - 如果关闭 `current_input_file`，请求会直接透传，不上传拆分上下文文件。
 - `thinking_injection`：默认关闭；开启后在最新 user 消息末尾追加思考增强提示词，提高高强度推理与工具调用前的思考稳定性；`prompt` 留空时使用内置默认提示词。
 

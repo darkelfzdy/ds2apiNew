@@ -64,6 +64,23 @@ func (s *responsesStreamRuntime) buildCompletedResponseObject(finalThinking, fin
 	}
 	indexed := make([]indexedItem, 0, len(calls)+1)
 
+	if s.reasoningItemAdded {
+		reasoningText := s.visibleReasoning.String()
+		indexed = append(indexed, indexedItem{
+			index: s.reasoningOutputIndex,
+			item: map[string]any{
+				"id":   s.reasoningItemID,
+				"type": "reasoning",
+				"summary": []map[string]any{
+					{"type": "summary_text", "text": reasoningText},
+				},
+				"content": []map[string]any{
+					{"type": "reasoning_text", "text": reasoningText},
+				},
+				"status": "completed",
+			},
+		})
+	}
 	if s.messageAdded {
 		text := s.visibleText.String()
 		indexed = append(indexed, indexedItem{
@@ -81,48 +98,6 @@ func (s *responsesStreamRuntime) buildCompletedResponseObject(finalThinking, fin
 				},
 			},
 		})
-	} else if len(calls) > 0 && strings.TrimSpace(finalThinking) != "" {
-		indexed = append(indexed, indexedItem{
-			index: s.ensureMessageOutputIndex(),
-			item: map[string]any{
-				"id":     s.ensureMessageItemID(),
-				"type":   "message",
-				"role":   "assistant",
-				"status": "completed",
-				"content": []map[string]any{
-					{
-						"type": "reasoning",
-						"text": finalThinking,
-					},
-				},
-			},
-		})
-	} else if len(calls) == 0 {
-		content := make([]map[string]any, 0, 2)
-		if finalThinking != "" {
-			content = append(content, map[string]any{
-				"type": "reasoning",
-				"text": finalThinking,
-			})
-		}
-		if finalText != "" {
-			content = append(content, map[string]any{
-				"type": "output_text",
-				"text": finalText,
-			})
-		}
-		if len(content) > 0 {
-			indexed = append(indexed, indexedItem{
-				index: s.ensureMessageOutputIndex(),
-				item: map[string]any{
-					"id":      s.ensureMessageItemID(),
-					"type":    "message",
-					"role":    "assistant",
-					"status":  "completed",
-					"content": content,
-				},
-			})
-		}
 	}
 
 	normalizedCalls := toolcall.NormalizeParsedToolCallsForSchemas(calls, s.toolsRaw)

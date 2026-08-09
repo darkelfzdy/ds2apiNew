@@ -110,11 +110,8 @@ func TestBuildOpenAIPromptWithToolInstructionsOnlyOmitsSchemas(t *testing.T) {
 	if len(toolNames) != 1 || toolNames[0] != "search" {
 		t.Fatalf("unexpected tool names: %#v", toolNames)
 	}
-	if strings.Contains(finalPrompt, "You have access to these tools") || strings.Contains(finalPrompt, "Description: search docs") || strings.Contains(finalPrompt, "Parameters:") {
-		t.Fatalf("tool descriptions should be externalized, got: %q", finalPrompt)
-	}
-	if !strings.Contains(finalPrompt, "Treat DS2API_TOOLS.txt as the authoritative list of callable tools and schemas") {
-		t.Fatalf("expected instructions-only prompt to point model at tools file, got: %q", finalPrompt)
+	if strings.Contains(finalPrompt, "You have access to these tools") || strings.Contains(finalPrompt, "Description: search docs") || strings.Contains(finalPrompt, "Parameters:") || strings.Contains(finalPrompt, "TOOLS.txt") {
+		t.Fatalf("tool descriptions and file references should be externalized, got: %q", finalPrompt)
 	}
 	if !strings.Contains(finalPrompt, "工具调用格式规范") || !strings.Contains(finalPrompt, "请记住：使用工具的唯一正确方式") {
 		t.Fatalf("expected tool format instructions to remain in live prompt, got: %q", finalPrompt)
@@ -139,7 +136,7 @@ func TestBuildOpenAIToolsContextTranscriptContainsOnlyDescriptions(t *testing.T)
 	if len(toolNames) != 1 || toolNames[0] != "search" {
 		t.Fatalf("unexpected tool names: %#v", toolNames)
 	}
-	for _, want := range []string{"# DS2API_TOOLS.txt", "You have access to these tools", "Tool: search", "Description: search docs", `Parameters: {"type":"object"}`} {
+	for _, want := range []string{"# TOOLS.txt", "You have access to these tools", "Tool: search", "Description: search docs", `Parameters: {"type":"object"}`} {
 		if !strings.Contains(transcript, want) {
 			t.Fatalf("expected tools transcript to contain %q, got: %q", want, transcript)
 		}

@@ -7,11 +7,12 @@ const SYSTEM_MARKER = 'System'
 const USER_MARKER = 'User'
 const ASSISTANT_MARKER = 'Assistant'
 const TOOL_MARKER = 'Tool'
-const CURRENT_INPUT_FILE_PROMPT = 'Continue from the latest state in the attached DS2API_HISTORY.txt context. Treat it as the current working state and answer the latest user request directly.'
+const CURRENT_INPUT_FILE_PROMPT = '继续会话'
 const LEGACY_CURRENT_INPUT_FILE_PROMPTS = new Set([
     'The current request and prior conversation context have already been provided. Answer the latest user request directly.',
+    'Continue from the latest state in the attached HISTORY.txt context. Treat it as the current working state and answer the latest user request directly.Do not mention HISTORY.txt in the main text.',
 ])
-const HISTORY_TRANSCRIPT_TITLE = '# DS2API_HISTORY.txt'
+const HISTORY_TRANSCRIPT_TITLE = '# HISTORY.txt'
 const HISTORY_TRANSCRIPT_ENTRY_RE = /^===\s+\d+\.\s+([A-Z][A-Z_ -]*)\s+===\s*$/gm
 
 function isCurrentInputFilePrompt(value) {

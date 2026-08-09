@@ -132,7 +132,7 @@ func httpCloakHeaders(headers map[string][]string) http.Header {
 	out := make(http.Header, len(headers))
 	for key, values := range headers {
 		for _, value := range values {
-			out.Add(http.CanonicalHeaderKey(key), value)
+			out.Add(key, value)
 		}
 	}
 	return out

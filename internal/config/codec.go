@@ -60,6 +60,9 @@ func (c Config) MarshalJSON() ([]byte, error) {
 	if c.ElasticPool.Enabled || c.ElasticPool.PerPool || c.ElasticPool.GlobalCount != 0 || c.ElasticPool.DefaultCount != 0 || c.ElasticPool.NoToolsCount != 0 || c.ElasticPool.ToolsOnlyCount != 0 {
 		m["elastic_pool"] = c.ElasticPool
 	}
+	if !IsZeroMihomoConfig(c.Mihomo) {
+		m["mihomo"] = c.Mihomo
+	}
 	if strings.TrimSpace(c.Vercel.Token) != "" || strings.TrimSpace(c.Vercel.ProjectID) != "" || strings.TrimSpace(c.Vercel.TeamID) != "" {
 		m["vercel"] = NormalizeVercelConfig(c.Vercel)
 	}
@@ -156,6 +159,10 @@ func (c *Config) UnmarshalJSON(b []byte) error {
 			if err := json.Unmarshal(v, &c.ElasticPool); err != nil {
 				return fmt.Errorf("invalid field %q: %w", k, err)
 			}
+		case "mihomo":
+			if err := json.Unmarshal(v, &c.Mihomo); err != nil {
+				return fmt.Errorf("invalid field %q: %w", k, err)
+			}
 		case "vercel":
 			if err := json.Unmarshal(v, &c.Vercel); err != nil {
 				return fmt.Errorf("invalid field %q: %w", k, err)
@@ -212,6 +219,7 @@ func (c Config) Clone() Config {
 			Enabled: cloneBoolPtr(c.AutoRouteVision.Enabled),
 		},
 		ElasticPool:      c.ElasticPool,
+		Mihomo:           cloneMihomoConfig(c.Mihomo),
 		Vercel:           c.Vercel,
 		VercelSyncHash:   c.VercelSyncHash,
 		VercelSyncTime:   c.VercelSyncTime,
@@ -221,6 +229,36 @@ func (c Config) Clone() Config {
 		clone.AdditionalFields[k] = v
 	}
 	return clone
+}
+
+// cloneMihomoConfig 深拷贝订阅/节点/端口映射切片与 map。
+// 节点的 Raw map 解析完成后不再原地修改（总是整体替换），因此共享引用。
+func cloneMihomoConfig(in MihomoConfig) MihomoConfig {
+	out := MihomoConfig{
+		Enabled:    in.Enabled,
+		BinaryPath: in.BinaryPath,
+		BasePort:   in.BasePort,
+		APIPort:    in.APIPort,
+	}
+	if len(in.Subscriptions) > 0 {
+		out.Subscriptions = make([]MihomoSubscription, len(in.Subscriptions))
+		for i, sub := range in.Subscriptions {
+			out.Subscriptions[i] = MihomoSubscription{
+				ID:        sub.ID,
+				Name:      sub.Name,
+				URL:       sub.URL,
+				UpdatedAt: sub.UpdatedAt,
+				Nodes:     slices.Clone(sub.Nodes),
+			}
+		}
+	}
+	if len(in.PortMap) > 0 {
+		out.PortMap = make(map[string]int, len(in.PortMap))
+		for k, v := range in.PortMap {
+			out.PortMap[k] = v
+		}
+	}
+	return out
 }
 
 func cloneStringMap(in map[string]string) map[string]string {

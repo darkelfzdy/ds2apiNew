@@ -68,3 +68,11 @@ CLAUDE.local.md
 data/
 .codex
 .roomodes
+
+# Mihomo proxy bridge binaries (download locally, never commit)
+/mihomo
+/mihomo.exe
+/bin/mihomo*
+
+# Local release/test packages
+dist/

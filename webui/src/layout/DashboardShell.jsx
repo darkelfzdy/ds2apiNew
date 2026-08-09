@@ -11,6 +11,7 @@ import {
     Server,
     Users,
     Globe,
+    Network,
     History,
     Loader2,
     ChevronRight,
@@ -28,6 +29,7 @@ const BatchImport = lazy(() => import('../components/BatchImport'))
 const VercelSyncContainer = lazy(() => import('../features/vercel/VercelSyncContainer'))
 const SettingsContainer = lazy(() => import('../features/settings/SettingsContainer'))
 const ProxyManagerContainer = lazy(() => import('../features/proxy/ProxyManagerContainer'))
+const MihomoBridgeContainer = lazy(() => import('../features/mihomo/MihomoBridgeContainer'))
 
 function TabLoadingFallback({ label }) {
     return (
@@ -67,6 +69,7 @@ export default function DashboardShell({ token, onLogout, config, fetchConfig, s
     const navItems = [
         { id: 'accounts', label: t('nav.accounts.label'), icon: Users, description: t('nav.accounts.desc') },
         { id: 'proxies', label: t('nav.proxies.label'), icon: Globe, description: t('nav.proxies.desc') },
+        { id: 'mihomo', label: t('nav.mihomo.label'), icon: Network, description: t('nav.mihomo.desc') },
         { id: 'test', label: t('nav.test.label'), icon: Server, description: t('nav.test.desc') },
         { id: 'history', label: t('nav.history.label'), icon: History, description: t('nav.history.desc') },
         { id: 'import', label: t('nav.import.label'), icon: Upload, description: t('nav.import.desc') },
@@ -134,6 +137,8 @@ export default function DashboardShell({ token, onLogout, config, fetchConfig, s
                 return <AccountManagerContainer config={config} onRefresh={fetchConfig} onMessage={showMessage} authFetch={authFetch} />
             case 'proxies':
                 return <ProxyManagerContainer config={config} onRefresh={fetchConfig} onMessage={showMessage} authFetch={authFetch} />
+            case 'mihomo':
+                return <MihomoBridgeContainer config={config} onRefresh={fetchConfig} onMessage={showMessage} authFetch={authFetch} />
             case 'test':
                 return <ApiTesterContainer config={config} onMessage={showMessage} authFetch={authFetch} />
             case 'history':

@@ -11,6 +11,7 @@ import (
 	adminconfig "ds2api/internal/httpapi/admin/configmgmt"
 	admindevcapture "ds2api/internal/httpapi/admin/devcapture"
 	adminhistory "ds2api/internal/httpapi/admin/history"
+	adminmihomo "ds2api/internal/httpapi/admin/mihomo"
 	adminproxies "ds2api/internal/httpapi/admin/proxies"
 	adminrawsamples "ds2api/internal/httpapi/admin/rawsamples"
 	adminsettings "ds2api/internal/httpapi/admin/settings"
@@ -25,6 +26,8 @@ type Handler struct {
 	DS          adminshared.DeepSeekCaller
 	OpenAI      adminshared.OpenAIChatCaller
 	ChatHistory *chathistory.Store
+	// Mihomo 是 Mihomo 代理桥控制器；nil 时 /admin/mihomo/* 返回 503。
+	Mihomo adminmihomo.Bridge
 	// WebUIFallback is forwarded to the auth sub-handler so its RequireAdmin
 	// middleware can serve the SPA index.html when a browser navigation request
 	// (GET, no Authorization, Accept: text/html) hits a protected admin API
@@ -39,6 +42,7 @@ func RegisterRoutes(r chi.Router, h *Handler) {
 	configHandler := &adminconfig.Handler{Store: deps.Store, Pool: deps.Pool, DS: deps.DS, OpenAI: deps.OpenAI, ChatHistory: deps.ChatHistory}
 	settingsHandler := &adminsettings.Handler{Store: deps.Store, Pool: deps.Pool, DS: deps.DS, OpenAI: deps.OpenAI, ChatHistory: deps.ChatHistory}
 	proxiesHandler := &adminproxies.Handler{Store: deps.Store, Pool: deps.Pool, DS: deps.DS, OpenAI: deps.OpenAI, ChatHistory: deps.ChatHistory}
+	mihomoHandler := &adminmihomo.Handler{Store: deps.Store, Pool: deps.Pool, Bridge: h.Mihomo}
 	rawSamplesHandler := &adminrawsamples.Handler{Store: deps.Store, Pool: deps.Pool, DS: deps.DS, OpenAI: deps.OpenAI, ChatHistory: deps.ChatHistory}
 	vercelHandler := &adminvercel.Handler{Store: deps.Store, Pool: deps.Pool, DS: deps.DS, OpenAI: deps.OpenAI, ChatHistory: deps.ChatHistory}
 	historyHandler := &adminhistory.Handler{Store: deps.Store, Pool: deps.Pool, DS: deps.DS, OpenAI: deps.OpenAI, ChatHistory: deps.ChatHistory}
@@ -52,6 +56,7 @@ func RegisterRoutes(r chi.Router, h *Handler) {
 		adminconfig.RegisterRoutes(pr, configHandler)
 		adminsettings.RegisterRoutes(pr, settingsHandler)
 		adminproxies.RegisterRoutes(pr, proxiesHandler)
+		adminmihomo.RegisterRoutes(pr, mihomoHandler)
 		adminaccounts.RegisterRoutes(pr, accountsHandler)
 		adminrawsamples.RegisterRoutes(pr, rawSamplesHandler)
 		adminvercel.RegisterRoutes(pr, vercelHandler)

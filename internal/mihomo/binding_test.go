@@ -1,0 +1,247 @@
+package mihomo
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"ds2api/internal/config"
+)
+
+// newBindingTestStore 构造一个内存态配置仓库（env-backed，不写磁盘）。
+// Mihomo.Enabled 保持 false，使 Apply 走“停止进程”分支，测试不会拉起
+// 真实的 mihomo 子进程。
+func newBindingTestStore(t *testing.T) *config.Store {
+	t.Helper()
+	t.Setenv("DS2API_CONFIG_JSON", `{
+		"keys": ["k1"],
+		"accounts": [
+			{"email": "a@test.com", "password": "x"},
+			{"email": "b@test.com", "password": "x"}
+		],
+		"mihomo": {
+			"enabled": false,
+			"subscriptions": [{
+				"id": "sub-1",
+				"name": "测试机场",
+				"url": "https://example.com/sub",
+				"nodes": [
+					{"name": "香港 01", "type": "ss", "raw": {"name": "香港 01", "type": "ss", "server": "hk.example.com", "port": 8388, "cipher": "aes-128-gcm", "password": "pw"}},
+					{"name": "日本 01", "type": "vmess", "raw": {"name": "日本 01", "type": "vmess", "server": "jp.example.com", "port": 443, "uuid": "u-u-i-d"}}
+				]
+			}]
+		}
+	}`)
+	return config.LoadStore()
+}
+
+func TestBindAccountAllocatesPortAndProxy(t *testing.T) {
+	store := newBindingTestStore(t)
+	mgr := NewManager(store, nil)
+	nodeKey := config.MihomoNodeKey("sub-1", "香港 01")
+
+	if err := mgr.BindAccount(context.Background(), "a@test.com", nodeKey); err != nil {
+		t.Fatalf("bind failed: %v", err)
+	}
+	snap := store.Snapshot()
+	proxyID := config.MihomoManagedProxyID(nodeKey)
+
+	var bound *config.Account
+	for i := range snap.Accounts {
+		if snap.Accounts[i].Email == "a@test.com" {
+			bound = &snap.Accounts[i]
+		}
+	}
+	if bound == nil || bound.ProxyID != proxyID {
+		t.Fatalf("account proxy binding missing: %+v", bound)
+	}
+	if got := snap.Mihomo.PortMap[nodeKey]; got != config.DefaultMihomoBasePort {
+		t.Fatalf("unexpected port allocation: %d", got)
+	}
+	var managed *config.Proxy
+	for i := range snap.Proxies {
+		if snap.Proxies[i].ID == proxyID {
+			managed = &snap.Proxies[i]
+		}
+	}
+	if managed == nil {
+		t.Fatal("managed proxy not created")
+	}
+	if managed.Type != "socks5" || managed.Host != "127.0.0.1" || managed.Port != config.DefaultMihomoBasePort {
+		t.Fatalf("managed proxy mismatch: %+v", managed)
+	}
+}
+
+func TestBindAccountSecondNodeGetsNextPort(t *testing.T) {
+	store := newBindingTestStore(t)
+	mgr := NewManager(store, nil)
+	key1 := config.MihomoNodeKey("sub-1", "香港 01")
+	key2 := config.MihomoNodeKey("sub-1", "日本 01")
+
+	if err := mgr.BindAccount(context.Background(), "a@test.com", key1); err != nil {
+		t.Fatalf("bind 1 failed: %v", err)
+	}
+	if err := mgr.BindAccount(context.Background(), "b@test.com", key2); err != nil {
+		t.Fatalf("bind 2 failed: %v", err)
+	}
+	snap := store.Snapshot()
+	if snap.Mihomo.PortMap[key1] != config.DefaultMihomoBasePort {
+		t.Fatalf("port1 mismatch: %d", snap.Mihomo.PortMap[key1])
+	}
+	if snap.Mihomo.PortMap[key2] != config.DefaultMihomoBasePort+1 {
+		t.Fatalf("port2 mismatch: %d", snap.Mihomo.PortMap[key2])
+	}
+}
+
+func TestUnbindAccountReclaimsPortAndProxy(t *testing.T) {
+	store := newBindingTestStore(t)
+	mgr := NewManager(store, nil)
+	nodeKey := config.MihomoNodeKey("sub-1", "香港 01")
+
+	if err := mgr.BindAccount(context.Background(), "a@test.com", nodeKey); err != nil {
+		t.Fatalf("bind failed: %v", err)
+	}
+	if err := mgr.BindAccount(context.Background(), "a@test.com", ""); err != nil {
+		t.Fatalf("unbind failed: %v", err)
+	}
+	snap := store.Snapshot()
+	if snap.Accounts[0].ProxyID != "" {
+		t.Fatalf("proxy_id not cleared: %q", snap.Accounts[0].ProxyID)
+	}
+	if len(snap.Proxies) != 0 {
+		t.Fatalf("managed proxy not reclaimed: %+v", snap.Proxies)
+	}
+	if len(snap.Mihomo.PortMap) != 0 {
+		t.Fatalf("port allocation not reclaimed: %+v", snap.Mihomo.PortMap)
+	}
+}
+
+func TestRebindSwitchesNodeAndReclaimsOld(t *testing.T) {
+	store := newBindingTestStore(t)
+	mgr := NewManager(store, nil)
+	key1 := config.MihomoNodeKey("sub-1", "香港 01")
+	key2 := config.MihomoNodeKey("sub-1", "日本 01")
+
+	if err := mgr.BindAccount(context.Background(), "a@test.com", key1); err != nil {
+		t.Fatalf("bind 1 failed: %v", err)
+	}
+	if err := mgr.BindAccount(context.Background(), "a@test.com", key2); err != nil {
+		t.Fatalf("rebind failed: %v", err)
+	}
+	snap := store.Snapshot()
+	wantID := config.MihomoManagedProxyID(key2)
+	if snap.Accounts[0].ProxyID != wantID {
+		t.Fatalf("proxy_id not switched: %q", snap.Accounts[0].ProxyID)
+	}
+	if _, ok := snap.Mihomo.PortMap[key1]; ok {
+		t.Fatal("old node port not reclaimed")
+	}
+	if len(snap.Proxies) != 1 || snap.Proxies[0].ID != wantID {
+		t.Fatalf("proxies after rebind mismatch: %+v", snap.Proxies)
+	}
+}
+
+func TestBindAccountRejectsUnknownNode(t *testing.T) {
+	store := newBindingTestStore(t)
+	mgr := NewManager(store, nil)
+	err := mgr.BindAccount(context.Background(), "a@test.com", config.MihomoNodeKey("sub-1", "不存在"))
+	if err == nil {
+		t.Fatal("expected error for unknown node")
+	}
+	if got := store.Snapshot().Accounts[0].ProxyID; got != "" {
+		t.Fatalf("failed bind must not change proxy_id, got %q", got)
+	}
+}
+
+func TestDeleteSubscriptionUnbindsAccounts(t *testing.T) {
+	store := newBindingTestStore(t)
+	mgr := NewManager(store, nil)
+	nodeKey := config.MihomoNodeKey("sub-1", "香港 01")
+	if err := mgr.BindAccount(context.Background(), "a@test.com", nodeKey); err != nil {
+		t.Fatalf("bind failed: %v", err)
+	}
+	if err := mgr.DeleteSubscription(context.Background(), "sub-1"); err != nil {
+		t.Fatalf("delete subscription failed: %v", err)
+	}
+	snap := store.Snapshot()
+	if len(snap.Mihomo.Subscriptions) != 0 {
+		t.Fatalf("subscription not deleted: %+v", snap.Mihomo.Subscriptions)
+	}
+	if snap.Accounts[0].ProxyID != "" {
+		t.Fatalf("binding not cleared: %q", snap.Accounts[0].ProxyID)
+	}
+	if len(snap.Proxies) != 0 || len(snap.Mihomo.PortMap) != 0 {
+		t.Fatalf("state not reclaimed: proxies=%+v portmap=%+v", snap.Proxies, snap.Mihomo.PortMap)
+	}
+}
+
+func TestAddAndRefreshSubscriptionOverHTTP(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
+		_, _ = w.Write([]byte("proxies:\n  - {name: \"远程 01\", type: ss, server: r.example.com, port: 8388, cipher: aes-128-gcm, password: pw}\n"))
+	}))
+	defer server.Close()
+
+	t.Setenv("DS2API_CONFIG_JSON", `{"keys":["k1"],"accounts":[{"email":"a@test.com","password":"x"}]}`)
+	store := config.LoadStore()
+	mgr := NewManager(store, nil)
+
+	sub, err := mgr.AddSubscription(context.Background(), "远程机场", server.URL)
+	if err != nil {
+		t.Fatalf("add subscription failed: %v", err)
+	}
+	if !strings.HasPrefix(sub.ID, "sub-") || len(sub.Nodes) != 1 || sub.Nodes[0].Name != "远程 01" {
+		t.Fatalf("unexpected subscription: %+v", sub)
+	}
+	// 绑定刚抓取的节点，验证端到端可用。
+	nodeKey := config.MihomoNodeKey(sub.ID, "远程 01")
+	if err := mgr.BindAccount(context.Background(), "a@test.com", nodeKey); err != nil {
+		t.Fatalf("bind remote node failed: %v", err)
+	}
+	count, err := mgr.RefreshSubscription(context.Background(), sub.ID)
+	if err != nil {
+		t.Fatalf("refresh failed: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("refresh node count mismatch: %d", count)
+	}
+	// 刷新后节点仍在，绑定必须保留。
+	snap := store.Snapshot()
+	if snap.Accounts[0].ProxyID == "" {
+		t.Fatal("binding lost after refresh")
+	}
+	if got := snap.Mihomo.PortMap[nodeKey]; got != config.DefaultMihomoBasePort {
+		t.Fatalf("port not stable after refresh: %d", got)
+	}
+}
+
+func TestListNodesReportsBinding(t *testing.T) {
+	store := newBindingTestStore(t)
+	mgr := NewManager(store, nil)
+	nodeKey := config.MihomoNodeKey("sub-1", "香港 01")
+	if err := mgr.BindAccount(context.Background(), "a@test.com", nodeKey); err != nil {
+		t.Fatalf("bind failed: %v", err)
+	}
+	nodes := mgr.ListNodes()
+	if len(nodes) != 2 {
+		t.Fatalf("expected 2 nodes, got %d", len(nodes))
+	}
+	var hk map[string]any
+	for _, n := range nodes {
+		if n["name"] == "香港 01" {
+			hk = n
+		}
+	}
+	if hk == nil {
+		t.Fatal("node 香港 01 missing from list")
+	}
+	if hk["local_port"] != config.DefaultMihomoBasePort {
+		t.Fatalf("local_port mismatch: %v", hk["local_port"])
+	}
+	accounts, _ := hk["accounts"].([]map[string]string)
+	if len(accounts) != 1 || accounts[0]["identifier"] != "a@test.com" || !strings.Contains(accounts[0]["label"], "a@test.com") {
+		t.Fatalf("bound accounts mismatch: %v", hk["accounts"])
+	}
+}

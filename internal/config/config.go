@@ -24,6 +24,7 @@ type Config struct {
 	ExpertPromptSegment  ExpertPromptSegmentConfig  `json:"expert_prompt_segment,omitempty"`
 	AutoRouteVision      AutoRouteVisionConfig      `json:"auto_route_vision,omitempty"`
 	ElasticPool          ElasticPoolConfig          `json:"elastic_pool,omitempty"`
+	Mihomo               MihomoConfig               `json:"mihomo,omitempty"`
 	Vercel               VercelConfig               `json:"vercel,omitempty"`
 	VercelSyncHash       string                     `json:"_vercel_sync_hash,omitempty"`
 	VercelSyncTime       int64                      `json:"_vercel_sync_time,omitempty"`
@@ -121,6 +122,7 @@ func (c *Config) NormalizeCredentials() {
 	}
 
 	c.Vercel = NormalizeVercelConfig(c.Vercel)
+	c.Mihomo = NormalizeMihomoConfig(c.Mihomo)
 	c.normalizeModelAliases()
 }
 

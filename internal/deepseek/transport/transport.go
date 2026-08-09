@@ -187,15 +187,18 @@ func (c *Client) dialTLS(ctx context.Context, authority, serverName string) (*ut
 
 func (c *Client) takePooledConn(authority string) *fhttp2.ClientConn {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	cc, ok := c.conns[authority]
 	if !ok {
+		c.mu.Unlock()
 		return nil
 	}
 	if !cc.CanTakeNewRequest() {
 		delete(c.conns, authority)
+		c.mu.Unlock()
+		_ = cc.Close()
 		return nil
 	}
+	c.mu.Unlock()
 	return cc
 }
 
@@ -237,6 +240,11 @@ func (c *Client) CloseIdleConnections() {
 	for _, cc := range conns {
 		_ = cc.Close()
 	}
+}
+
+// Close releases all pooled connections owned by the client.
+func (c *Client) Close() {
+	c.CloseIdleConnections()
 }
 
 func http1RoundTrip(conn net.Conn, req *http.Request) (*http.Response, error) {

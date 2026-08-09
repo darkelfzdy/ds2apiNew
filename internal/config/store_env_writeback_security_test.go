@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -14,6 +15,11 @@ func TestWriteConfigBytesUsesPrivatePermissions(t *testing.T) {
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("stat config: %v", err)
+	}
+	if runtime.GOOS == "windows" {
+		// Windows does not expose Unix permission bits; the write itself was
+		// already verified above.
+		return
 	}
 	if got := info.Mode().Perm(); got != 0o600 {
 		t.Fatalf("expected config mode 0600, got %o", got)

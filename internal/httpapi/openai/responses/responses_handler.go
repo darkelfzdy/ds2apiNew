@@ -222,7 +222,12 @@ func (h *Handler) handleResponsesStream(w http.ResponseWriter, r *http.Request, 
 	if thinkingEnabled {
 		initialType = "thinking"
 	}
-	bufferToolContent := len(toolNames) > 0
+	// 无论客户端是否传 tools，都启用 toolSieve 流式拦截：
+	// 模型在提示词中被要求使用 <|EPSE|tool_calls> 格式输出工具调用，
+	// 若客户端未传 tools（如"继续会话"请求），bufferToolContent 为 false
+	// 会导致 EPSE 原文作为正文透传给客户端，产生乱码。
+	// toolSieve 解析不依赖 toolNames 过滤，空列表也能正常拦截。
+	bufferToolContent := true
 	emitEarlyToolDeltas := h.toolcallFeatureMatchEnabled() && h.toolcallEarlyEmitHighConfidence()
 	stripReferenceMarkers := stripReferenceMarkersEnabled()
 

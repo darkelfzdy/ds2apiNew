@@ -54,11 +54,15 @@ RUN set -eux; \
 
 FROM debian:bookworm-slim AS runtime-base
 WORKDIR /app
+# 必须安装 CA 根证书：否则容器内拉取 HTTPS 机场订阅会报
+# x509: certificate signed by unknown authority。
+# update-ca-certificates 确保系统根证书库就绪（含内网/企业自建 CA 追加场景）。
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && update-ca-certificates \
     && groupadd -r ds2api && useradd -r -g ds2api -d /app -s /sbin/nologin ds2api \
-    && mkdir -p /app/data /data && chown -R ds2api:ds2api /app /data \
-    && rm -rf /var/lib/apt/lists/*
+    && mkdir -p /app/data /data && chown -R ds2api:ds2api /app /data
 COPY --from=busybox-tools /bin/busybox /usr/local/bin/busybox
 COPY --from=mihomo-downloader /out/mihomo /usr/local/bin/mihomo
 EXPOSE 5001

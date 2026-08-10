@@ -119,8 +119,8 @@ cp config.example.json config.json
 
 # 编辑 .env（请改成你的强密码），至少设置：
 #   DS2API_ADMIN_KEY=your-admin-key
-# 如需修改宿主机端口，可额外设置：
-#   DS2API_HOST_PORT=6011
+# 如需修改监听端口（host 模式下生效），可额外设置：
+#   PORT=5001
 
 # 启动
 docker-compose up -d
@@ -129,7 +129,17 @@ docker-compose up -d
 docker-compose logs -f
 ```
 
-默认 `docker-compose.yml` 直接使用 `ghcr.io/ouqiting/ds2api:latest`，并把宿主机 `6011` 映射到容器内的 `5001`。如果你希望直接对外暴露 `5001`，请设置 `DS2API_HOST_PORT=5001`（或者手动调整 `ports` 配置）。
+默认 `docker-compose.yml` 直接使用 `ghcr.io/ouqiting/ds2api:latest`，并采用 **host 网络模式**（`network_mode: host`）：ds2api 与 Mihomo 代理桥的监听端口（`5001` 与节点监听端口 `10801` 起）直接落在宿主机上，避免 bridge 网络端口映射隔离导致代理桥 `Connection Refused`。监听端口由 `.env` 的 `PORT` 控制（默认 `5001`）；host 模式下 `ports` 映射不生效。
+Compose 还会把宿主机的 CA 根证书（`/etc/ssl/certs/ca-certificates.crt`）只读挂载进容器，避免容器内拉取 HTTPS 机场订阅时报 `x509: certificate signed by unknown authority`（镜像本身也已内置 CA 根证书）。
+
+> **Windows/macOS（Docker Desktop）**：host 网络模式不可用，请改用覆盖文件：
+> ```bash
+> docker compose -f docker-compose.yml -f docker-compose.windows.yml up -d
+> ```
+> 它回退到 bridge + 端口映射（`${DS2API_HOST_PORT:-6011}:5001`）。代理桥的 mihomo
+> 是容器内子进程，SOCKS5 监听都在容器自身 `127.0.0.1` 上，bridge 下同样可用。
+> 若挂载 `/etc/ssl/certs/ca-certificates.crt` 报 "bind mount source does not exist"，
+> 把该行从 `docker-compose.yml` 的 `volumes` 注释掉即可（镜像已内置 CA 根证书）。
 Compose 模板还会默认设置 `DS2API_CONFIG_PATH=/data/config.json` 并挂载 `./config.json:/data/config.json`，优先避免 `/app` 只读带来的配置持久化问题。
 镜像内会预创建 `/data` 并授权给非 root 的 `ds2api` 用户；如果你使用 bind mount 单文件，请确保宿主机 `config.json` 至少可被容器用户读取/写入，例如 `chmod 644 config.json`，否则 Linux UID/GID 不一致时仍可能出现 `open /data/config.json: permission denied`。
 兼容说明：若未设置 `DS2API_CONFIG_PATH` 且运行目录是 `/app`，新版本会优先使用 `/data/config.json`；当该文件不存在但检测到历史 `/app/config.json` 时，会自动回退读取旧路径，避免升级后“配置丢失”。

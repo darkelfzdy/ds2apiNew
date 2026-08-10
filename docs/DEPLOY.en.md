@@ -119,8 +119,8 @@ cp config.example.json config.json
 
 # Edit .env and set at least:
 #   DS2API_ADMIN_KEY=your-admin-key
-# Optionally set the host port:
-#   DS2API_HOST_PORT=6011
+# Optionally change the listen port (effective in host mode):
+#   PORT=5001
 
 # Start
 docker-compose up -d
@@ -129,7 +129,14 @@ docker-compose up -d
 docker-compose logs -f
 ```
 
-The default `docker-compose.yml` directly uses `ghcr.io/cjackhwang/ds2api:latest` and maps host port `6011` to container port `5001`. If you want `5001` exposed directly, set `DS2API_HOST_PORT=5001` (or adjust the `ports` mapping).
+The default `docker-compose.yml` directly uses `ghcr.io/ouqiting/ds2api:latest` and uses **host network mode** (`network_mode: host`): the ds2api and Mihomo proxy bridge listen ports (`5001` and per-node listeners starting at `10801`) land directly on the host, avoiding bridge-network port-mapping isolation that would otherwise cause proxy bridge `Connection Refused`. The listen port is controlled by `PORT` in `.env` (default `5001`); `ports` mapping is ignored under host mode.
+The compose template also mounts the host CA root bundle (`/etc/ssl/certs/ca-certificates.crt`) read-only into the container so HTTPS subscription fetches do not fail with `x509: certificate signed by unknown authority` (the image itself also bundles CA certs).
+
+> **Windows/macOS (Docker Desktop)**: host network mode is unavailable; use the override file instead:
+> ```bash
+> docker compose -f docker-compose.yml -f docker-compose.windows.yml up -d
+> ```
+> It falls back to bridge networking with port mapping (`${DS2API_HOST_PORT:-6011}:5001`). The proxy bridge's mihomo is an in-container subprocess whose SOCKS5 listeners live on the container's own `127.0.0.1`, so it works fine under bridge networking. If mounting `/etc/ssl/certs/ca-certificates.crt` fails with "bind mount source does not exist", comment that line out of the `volumes` section in `docker-compose.yml` (the image already bundles CA root certs).
 The compose template also defaults to `DS2API_CONFIG_PATH=/data/config.json` with `./config.json:/data/config.json` mounted, so deployments avoid read-only `/app` persistence issues by default.
 The image pre-creates `/data` and grants it to the non-root `ds2api` user. If you bind-mount a single host file, make sure `config.json` is readable/writable by the container user, for example with `chmod 644 config.json`; otherwise Linux UID/GID mismatches can still cause `open /data/config.json: permission denied`.
 Compatibility note: when `DS2API_CONFIG_PATH` is unset and runtime base dir is `/app`, newer versions prefer `/data/config.json`; if that file is missing but legacy `/app/config.json` exists, DS2API automatically falls back to the legacy path to avoid post-upgrade config loss.

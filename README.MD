@@ -237,7 +237,7 @@ cp config.example.json config.json
 
 ### 方式二：Docker 运行
 
-从最新 Release 下载 `docker-compose.tar.gz`（内含 `docker-compose.yml`、`config.example.json`、`.env.example`、`README.MD` 四个文件）：
+从最新 Release 下载 `docker-compose.tar.gz`（内含 `docker-compose.yml`、`docker-compose.windows.yml`、`config.example.json`、`.env.example`、`README.MD` 五个文件）：
 
 ```bash
 # 1. 下载并解压
@@ -249,7 +249,7 @@ tar -xzf docker-compose.tar.gz
 cp .env.example .env
 cp config.example.json config.json
 
-# 3. 编辑 .env（至少设置 DS2API_ADMIN_KEY；如需修改宿主机端口，可额外设置 DS2API_HOST_PORT）
+# 3. 编辑 .env（至少设置 DS2API_ADMIN_KEY；如需修改监听端口可设置 PORT）
 nano .env
 #    DS2API_ADMIN_KEY=请替换为强密码
 
@@ -260,7 +260,25 @@ docker compose up -d
 docker compose logs -f
 ```
 
-默认 `docker-compose.yml` 会把宿主机 `6011` 映射到容器内的 `5001`。如果你希望直接对外暴露 `5001`，请设置 `DS2API_HOST_PORT=5001`（或者手动调整 `ports` 配置）。
+`docker-compose.yml` 默认使用 **host 网络模式**（`network_mode: host`）：ds2api 与
+Mihomo 代理桥的端口（`5001` 与节点监听端口 `10801` 起）直接落在宿主机上，避免
+bridge 网络端口映射隔离导致代理桥 `Connection Refused`。监听端口由 `.env` 中的
+`PORT` 控制（默认 `5001`）；host 模式下 `ports` 映射不生效。
+Compose 还会把宿主机的 CA 根证书（`/etc/ssl/certs/ca-certificates.crt`）只读挂载
+进容器，避免容器内拉取 HTTPS 机场订阅时报
+`x509: certificate signed by unknown authority`（镜像本身也已内置 CA 根证书）。
+> **host 网络模式仅适用于 Linux 宿主机**（Linux 服务器是主要部署形态，默认即此）。
+> 使用 Docker Desktop（Windows/macOS）时请改用覆盖文件：
+>
+> ```bash
+> docker compose -f docker-compose.yml -f docker-compose.windows.yml up -d
+> ```
+>
+> 它会回退到 bridge + 端口映射（`${DS2API_HOST_PORT:-6011}:5001`）。代理桥的
+> mihomo 是容器内子进程，SOCKS5 监听都在容器自身 `127.0.0.1` 上，bridge 下同样
+> 可用，无需 host 网络。若挂载 `/etc/ssl/certs/ca-certificates.crt` 报
+> "bind mount source does not exist"，把该行从 `docker-compose.yml` 的 `volumes`
+> 注释掉即可（镜像已内置 CA 根证书）。
 同时默认把 `./config.json` 挂载到容器 `/data/config.json`，并设置 `DS2API_CONFIG_PATH=/data/config.json`，用于避免 `/app` 只读导致运行时 token 持久化失败。
 镜像会预创建 `/data` 并授权给非 root 的 `ds2api` 用户；如果使用单文件 bind mount，请确保宿主机 `config.json` 对容器用户可读写，例如 `chmod 644 config.json`。
 

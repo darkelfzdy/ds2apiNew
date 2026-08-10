@@ -26,6 +26,9 @@ type Handler struct {
 	DS          adminshared.DeepSeekCaller
 	OpenAI      adminshared.OpenAIChatCaller
 	ChatHistory *chathistory.Store
+	// ResetProxyClients 透传给 /admin/proxies 处理器：代理配置变化后
+	// 清理 DeepSeek client 侧的代理连接池缓存。
+	ResetProxyClients func()
 	// Mihomo 是 Mihomo 代理桥控制器；nil 时 /admin/mihomo/* 返回 503。
 	Mihomo adminmihomo.Bridge
 	// WebUIFallback is forwarded to the auth sub-handler so its RequireAdmin
@@ -41,7 +44,7 @@ func RegisterRoutes(r chi.Router, h *Handler) {
 	accountsHandler := &adminaccounts.Handler{Store: deps.Store, Pool: deps.Pool, DS: deps.DS, OpenAI: deps.OpenAI, ChatHistory: deps.ChatHistory}
 	configHandler := &adminconfig.Handler{Store: deps.Store, Pool: deps.Pool, DS: deps.DS, OpenAI: deps.OpenAI, ChatHistory: deps.ChatHistory}
 	settingsHandler := &adminsettings.Handler{Store: deps.Store, Pool: deps.Pool, DS: deps.DS, OpenAI: deps.OpenAI, ChatHistory: deps.ChatHistory}
-	proxiesHandler := &adminproxies.Handler{Store: deps.Store, Pool: deps.Pool, DS: deps.DS, OpenAI: deps.OpenAI, ChatHistory: deps.ChatHistory}
+	proxiesHandler := &adminproxies.Handler{Store: deps.Store, Pool: deps.Pool, DS: deps.DS, OpenAI: deps.OpenAI, ChatHistory: deps.ChatHistory, ResetProxyClients: h.ResetProxyClients}
 	mihomoHandler := &adminmihomo.Handler{Store: deps.Store, Pool: deps.Pool, Bridge: h.Mihomo}
 	rawSamplesHandler := &adminrawsamples.Handler{Store: deps.Store, Pool: deps.Pool, DS: deps.DS, OpenAI: deps.OpenAI, ChatHistory: deps.ChatHistory}
 	vercelHandler := &adminvercel.Handler{Store: deps.Store, Pool: deps.Pool, DS: deps.DS, OpenAI: deps.OpenAI, ChatHistory: deps.ChatHistory}

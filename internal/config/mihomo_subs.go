@@ -55,6 +55,25 @@ func loadMihomoSubscriptionsFile(cfg *Config) error {
 	return nil
 }
 
+// configFileHasLegacyMihomoSubs 判断 config.json 原始内容里 mihomo 段是否仍
+// 内嵌旧式 subscriptions/port_map（需要在下一次保存时迁移到独立文件）。
+func configFileHasLegacyMihomoSubs(path string) bool {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var doc struct {
+		Mihomo struct {
+			Subscriptions json.RawMessage `json:"subscriptions"`
+			PortMap       json.RawMessage `json:"port_map"`
+		} `json:"mihomo"`
+	}
+	if err := json.Unmarshal(content, &doc); err != nil {
+		return false
+	}
+	return len(doc.Mihomo.Subscriptions) > 0 || len(doc.Mihomo.PortMap) > 0
+}
+
 // saveMihomoSubscriptionsFile 把订阅与端口映射写入独立文件。
 // 无订阅且无端口映射时删除该文件（最后一次删除订阅后自动清理）。
 func saveMihomoSubscriptionsFile(m MihomoConfig) error {

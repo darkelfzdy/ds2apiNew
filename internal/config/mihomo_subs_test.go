@@ -224,6 +224,62 @@ func TestMihomoSubscriptionsMigratedFromLegacyConfigJSON(t *testing.T) {
 	}
 }
 
+func TestMihomoOnlyChangesSkipUnrelatedFileWrites(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	subsPath := filepath.Join(dir, "mihomo_subscriptions.json")
+	t.Setenv("DS2API_CONFIG_JSON", "")
+	t.Setenv("DS2API_CONFIG_PATH", path)
+	t.Setenv("DS2API_MIHOMO_SUBSCRIPTIONS_PATH", subsPath)
+
+	store := LoadStore()
+	if err := store.Update(func(c *Config) error {
+		c.Keys = []string{"k1"}
+		c.Mihomo.Subscriptions = []MihomoSubscription{{
+			ID: "sub-1", URL: "https://example.com/sub",
+			Nodes: []MihomoNode{{Name: "节点", Type: "ss"}},
+		}}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed update failed: %v", err)
+	}
+
+	// config.json 置只读：纯 mihomo 数据变更不应重写它。
+	if err := os.Chmod(path, 0o444); err != nil {
+		t.Fatalf("chmod config: %v", err)
+	}
+	if err := store.Update(func(c *Config) error {
+		c.Mihomo.Subscriptions[0].Nodes[0].LatencyMS = 88
+		return nil
+	}); err != nil {
+		_ = os.Chmod(path, 0o644)
+		t.Fatalf("mihomo-only update must not rewrite config.json: %v", err)
+	}
+	_ = os.Chmod(path, 0o644)
+
+	// 订阅文件置只读：非 mihomo 配置变更不应重写它。
+	if err := os.Chmod(subsPath, 0o444); err != nil {
+		t.Fatalf("chmod subs: %v", err)
+	}
+	if err := store.Update(func(c *Config) error {
+		c.Keys = append(c.Keys, "k2")
+		return nil
+	}); err != nil {
+		_ = os.Chmod(subsPath, 0o644)
+		t.Fatalf("keys-only update must not rewrite subscriptions file: %v", err)
+	}
+	_ = os.Chmod(subsPath, 0o644)
+
+	// 数据一致性：订阅文件应已持久化延迟字段。
+	content, err := os.ReadFile(subsPath)
+	if err != nil {
+		t.Fatalf("read subs file: %v", err)
+	}
+	if !strings.Contains(string(content), "latency_ms") {
+		t.Fatalf("subs file should persist latency on node: %s", content)
+	}
+}
+
 func TestMihomoSubscriptionsFileRemovedWhenEmpty(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")

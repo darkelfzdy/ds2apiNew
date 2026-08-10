@@ -45,6 +45,15 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 	return c.cloak.Do(req)
 }
 
+// CloseIdleConnections 释放 httpcloak 底层连接池的空闲连接，
+// 供代理配置变更后清理缓存客户端使用。
+func (c *Client) CloseIdleConnections() {
+	if c == nil || c.cloak == nil || c.cloak.client == nil {
+		return
+	}
+	c.cloak.client.Close()
+}
+
 func NewFallbackClient(timeout time.Duration, dialContext DialContextFunc) *http.Client {
 	useEnvProxy := dialContext == nil
 	if dialContext == nil {

@@ -132,6 +132,7 @@ func (m *Manager) BindAccount(_ context.Context, identifier, nodeKey string) err
 		if nodeKey == "" {
 			c.Accounts[idx].ProxyID = ""
 			c.Accounts[idx].NodeCooldownUntil = 0
+			c.Accounts[idx].NoProxy = true // 显式解绑：走直连，自动调度不再分配
 			gcLocked(c)
 			return validateMutation(c)
 		}
@@ -143,6 +144,7 @@ func (m *Manager) BindAccount(_ context.Context, identifier, nodeKey string) err
 		proxy := upsertManagedProxyLocked(c, nodeKey, node.Name, port)
 		c.Accounts[idx].ProxyID = proxy.ID
 		c.Accounts[idx].NodeCooldownUntil = 0 // 手动绑定视为用户显式选择，重置自动换号冷却
+		c.Accounts[idx].NoProxy = false       // 显式绑定节点，允许自动调度
 		gcLocked(c)
 		return validateMutation(c)
 	})
@@ -202,9 +204,10 @@ func (m *Manager) AssignAccounts(_ context.Context, nodeKeys []string) (int, err
 		}
 		gcLocked(c)
 		// 按节点列表从上到下循环分配（跳过禁用/弹性号池休眠账号，不占用端口）。
+		// 显式选择"不走代理"（NoProxy）的账号同样跳过，不参与一键分配。
 		idx := 0
 		for i := range c.Accounts {
-			if c.Accounts[i].Disabled || c.Accounts[i].Identifier() == "" {
+			if c.Accounts[i].Disabled || c.Accounts[i].Identifier() == "" || c.Accounts[i].NoProxy {
 				continue
 			}
 			nodeKey := nodeKeys[idx%len(nodeKeys)]
@@ -434,8 +437,20 @@ func (m *Manager) ListNodes() []map[string]any {
 }
 
 func (m *Manager) resetPool() {
+	if m == nil {
+		return
+	}
+	m.rebuildProxyNodeIndex()
 	if m.pool != nil {
 		m.pool.Reset()
+	}
+	m.mu.Lock()
+	reset := m.proxyReset
+	m.mu.Unlock()
+	if reset != nil {
+		// 绑定/订阅变更改变了托管代理（127.0.0.1:<port>）的 host/port，
+		// 丢弃 DeepSeek client 侧缓存的代理连接池，避免复用旧端口。
+		reset()
 	}
 }
 

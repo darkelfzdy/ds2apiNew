@@ -45,7 +45,14 @@ const (
 	defaultHealthTimeoutMS = 5000
 	defaultFailThreshold   = 2
 	defaultHealthTestURL   = "https://www.google.com/generate_204"
-	healthTestConcurrency  = 8
+	// healthTestConcurrency 批量测速/手动测延迟的并发上限（与文档一致）。
+	healthTestConcurrency = 60
+	// reportDedupInterval 同一节点真实失败的去抖窗口：主传输失败 + fallback
+	// 失败在同一请求里连发两条，只算一次；窗口内并发的失败请求也只累计一次。
+	reportDedupInterval = time.Second
+	// realFailResignalInterval 节点被“真实请求失败”标 fail 后的重新上报节流，
+	// 避免持续失败时每请求都重复落盘 + 触发调和。
+	realFailResignalInterval = 30 * time.Second
 )
 
 func healthTimeoutMS() int {
@@ -83,9 +90,9 @@ func envInt(key string, def int) int {
 	return n
 }
 
-// SetNodeHealth 覆盖节点健康状态（内部测速与测试注入共用）。
-// 写回订阅节点字段（随订阅持久化）并同步运行时连续失败计数。
-func (m *Manager) SetNodeHealth(nodeKey string, h NodeHealth) {
+// setNodeHealth 覆盖节点健康状态（内部测速与测试注入共用，仅在包内使用，
+// 不对外暴露，避免任意外部注入连续失败计数）。
+func (m *Manager) setNodeHealth(nodeKey string, h NodeHealth) {
 	if m == nil || m.store == nil || strings.TrimSpace(nodeKey) == "" {
 		return
 	}
@@ -121,6 +128,111 @@ func setNodeHealthLocked(c *config.Config, nodeKey string, h NodeHealth) {
 			node.TestedAt = h.TestedAt
 			return
 		}
+	}
+}
+
+// rebuildProxyNodeIndex 重建“托管代理 ID -> 节点键”反查缓存，供真实请求失败
+// 反馈把账号请求成败归并到节点；同时清理已消失节点的真实失败运行时状态。
+// 在启动、绑定/订阅变更、应用运行时配置后调用。
+func (m *Manager) rebuildProxyNodeIndex() {
+	if m == nil || m.store == nil {
+		return
+	}
+	index := proxyNodeMap(m.store.Snapshot())
+	m.healthMu.Lock()
+	m.proxyToNode = index
+	valid := map[string]struct{}{}
+	for _, nodeKey := range index {
+		valid[nodeKey] = struct{}{}
+	}
+	for k := range m.realFailStreak {
+		if _, ok := valid[k]; !ok {
+			delete(m.realFailStreak, k)
+		}
+	}
+	for k := range m.realLastFail {
+		if _, ok := valid[k]; !ok {
+			delete(m.realLastFail, k)
+		}
+	}
+	for k := range m.realFailMarked {
+		if _, ok := valid[k]; !ok {
+			delete(m.realFailMarked, k)
+		}
+	}
+	m.healthMu.Unlock()
+}
+
+// ReportUpstreamResult 接收 DeepSeek client 层对每个上游请求的成功/失败回调，
+// 把真实流量结果闭环反馈到节点健康：节点上连续真实失败达到阈值时立即把它标为
+// fail 并唤醒 watcher 即时故障转移，而不是等下一拍巡检。
+//
+// 仅对 mihomo 托管代理生效；成功请求（含主传输失败后 fallback 成功的请求）
+// 清零该节点的真实失败计数，节点随后由巡检测速自然恢复。
+func (m *Manager) ReportUpstreamResult(proxyID string, success bool) {
+	if m == nil || m.store == nil {
+		return
+	}
+	proxyID = strings.TrimSpace(proxyID)
+	if !config.IsMihomoManagedProxyID(proxyID) {
+		return
+	}
+	m.healthMu.Lock()
+	nodeKey := m.proxyToNode[proxyID]
+	if nodeKey == "" {
+		m.healthMu.Unlock()
+		return
+	}
+	now := time.Now()
+	if success {
+		delete(m.realFailStreak, nodeKey)
+		delete(m.realLastFail, nodeKey)
+		delete(m.realFailMarked, nodeKey)
+		m.healthMu.Unlock()
+		return
+	}
+	if now.Sub(m.realLastFail[nodeKey]) < reportDedupInterval {
+		m.healthMu.Unlock()
+		return
+	}
+	m.realLastFail[nodeKey] = now
+	if m.realFailStreak == nil {
+		m.realFailStreak = map[string]int{}
+	}
+	m.realFailStreak[nodeKey]++
+	streak := m.realFailStreak[nodeKey]
+	resignal := now.Sub(m.realFailMarked[nodeKey]) < realFailResignalInterval
+	m.healthMu.Unlock()
+
+	if streak < failThreshold() || resignal {
+		return
+	}
+	m.markNodeFailByTraffic(nodeKey)
+}
+
+// markNodeFailByTraffic 由真实请求连续失败触发：把节点健康落盘为 fail、同步
+// 运行时失败计数，并唤醒 watcher 立即调和（不等下一拍巡检）。
+func (m *Manager) markNodeFailByTraffic(nodeKey string) {
+	m.healthMu.Lock()
+	m.realFailMarked[nodeKey] = time.Now()
+	m.healthMu.Unlock()
+
+	if err := m.store.Update(func(c *config.Config) error {
+		setNodeHealthLocked(c, nodeKey, NodeHealth{
+			Status:   NodeHealthFail,
+			Error:    "真实请求连续失败",
+			TestedAt: time.Now().Unix(),
+		})
+		return nil
+	}); err != nil {
+		config.Logger.Warn("[mihomo] mark node fail by traffic failed", "node_key", nodeKey, "error", err)
+		return
+	}
+	m.setFailStreak(nodeKey, failThreshold())
+	config.Logger.Warn("[mihomo] node marked fail by real request failures", "node_key", nodeKey, "threshold", failThreshold())
+	select {
+	case m.reconcileCh <- struct{}{}:
+	default:
 	}
 }
 
@@ -218,6 +330,7 @@ type nodeTestResult struct {
 func (m *Manager) testNodeDelays(ctx context.Context, apiPort int, nodes []nodeRef) []nodeTestResult {
 	timeoutMS := healthTimeoutMS()
 	testURL := healthTestURL()
+	secret := m.getAPISecret()
 	results := make([]nodeTestResult, len(nodes))
 
 	jobs := make(chan int)
@@ -228,7 +341,7 @@ func (m *Manager) testNodeDelays(ctx context.Context, apiPort int, nodes []nodeR
 			defer wg.Done()
 			for i := range jobs {
 				node := nodes[i]
-				latency, err := probeNodeDelay(ctx, apiPort, node.Key, testURL, timeoutMS)
+				latency, err := probeNodeDelay(ctx, apiPort, node.Key, testURL, timeoutMS, secret)
 				h := NodeHealth{TestedAt: time.Now().Unix()}
 				if err != nil {
 					h.Status = NodeHealthFail
@@ -272,13 +385,19 @@ func (m *Manager) applyHealthResults(results []nodeTestResult) {
 			m.failStreak[r.NodeKey]++
 		} else {
 			delete(m.failStreak, r.NodeKey)
+			// 探测成功说明节点恢复，一并清零真实失败反馈状态。
+			delete(m.realFailStreak, r.NodeKey)
+			delete(m.realLastFail, r.NodeKey)
+			delete(m.realFailMarked, r.NodeKey)
 		}
 	}
 	m.healthMu.Unlock()
 }
 
 // probeNodeDelay 调用 mihomo 控制 API 测试单个代理节点延迟（毫秒）。
-func probeNodeDelay(ctx context.Context, apiPort int, proxyName, testURL string, timeoutMS int) (int, error) {
+// apiSecret 非空时携带 Authorization: Bearer 访问（与 runtime.yaml 的
+// external-controller secret 对应）。
+func probeNodeDelay(ctx context.Context, apiPort int, proxyName, testURL string, timeoutMS int, apiSecret string) (int, error) {
 	endpoint := fmt.Sprintf(
 		"http://127.0.0.1:%d/proxies/%s/delay?url=%s&timeout=%d",
 		apiPort, url.PathEscape(proxyName), url.QueryEscape(testURL), timeoutMS,
@@ -286,6 +405,9 @@ func probeNodeDelay(ctx context.Context, apiPort int, proxyName, testURL string,
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return 0, err
+	}
+	if strings.TrimSpace(apiSecret) != "" {
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(apiSecret))
 	}
 	client := &http.Client{Timeout: time.Duration(timeoutMS+3000) * time.Millisecond}
 	resp, err := client.Do(req)
@@ -325,10 +447,11 @@ func (m *Manager) runningWithAPI() bool {
 	return m.apiReachable()
 }
 
-// apiReachable 检查 external-controller 端口当前是否可连（不关心进程状态标记）。
+// apiReachable 检查 external-controller 端口当前是否真的由 mihomo 服务
+// （TCP 可连 + /version 鉴权通过），不关心进程状态标记。
 func (m *Manager) apiReachable() bool {
 	if m.store == nil {
 		return false
 	}
-	return portListening(m.store.Snapshot().Mihomo.APIPort)
+	return m.controllerVerified(m.store.Snapshot().Mihomo.APIPort)
 }

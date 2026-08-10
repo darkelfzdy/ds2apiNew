@@ -70,7 +70,21 @@ func (h *Handler) addProxy(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"detail": err.Error()})
 		return
 	}
+	h.ProxyChanged()
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "proxy": proxyResponse(proxy)})
+}
+
+// ProxyChanged 在代理新增/变更后刷新运行侧缓存（账号池 + DeepSeek client 代理连接池）。
+func (h *Handler) ProxyChanged() {
+	if h == nil {
+		return
+	}
+	if h.Pool != nil {
+		h.Pool.Reset()
+	}
+	if h.ResetProxyClients != nil {
+		h.ResetProxyClients()
+	}
 }
 
 func (h *Handler) updateProxy(w http.ResponseWriter, r *http.Request) {
@@ -105,6 +119,7 @@ func (h *Handler) updateProxy(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"detail": err.Error()})
 		return
 	}
+	h.ProxyChanged()
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "proxy": proxyResponse(proxy)})
 }
 
@@ -141,6 +156,7 @@ func (h *Handler) deleteProxy(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"detail": err.Error()})
 		return
 	}
+	h.ProxyChanged()
 	writeJSON(w, http.StatusOK, map[string]any{"success": true})
 }
 
@@ -185,6 +201,8 @@ func (h *Handler) updateAccountProxy(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			c.Accounts[i].ProxyID = proxyID
+			// 显式选择"不代理"（proxy_id 为空）后，自动调度不再给该账号分配节点。
+			c.Accounts[i].NoProxy = strings.TrimSpace(proxyID) == ""
 			return validateProxyMutation(c)
 		}
 		return newRequestError("账号不存在")
@@ -197,6 +215,6 @@ func (h *Handler) updateAccountProxy(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"detail": err.Error()})
 		return
 	}
-	h.Pool.Reset()
+	h.ProxyChanged()
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "proxy_id": proxyID})
 }

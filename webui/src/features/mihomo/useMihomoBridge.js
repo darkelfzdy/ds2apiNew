@@ -91,7 +91,7 @@ export default function useMihomoBridge({ authFetch, onMessage, onConfigChanged,
         loadAll()
     }, [loadAll])
 
-    // 定时/实时刷新：后台自动巡检（默认 15s）会更新节点延迟并落盘，
+    // 定时/实时刷新：后台自动巡检（默认 60s）会更新节点延迟并落盘，
     // 前端定时轮询让面板上的延迟/健康状态保持最新。
     useEffect(() => {
         const interval = setInterval(() => {

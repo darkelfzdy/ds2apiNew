@@ -76,7 +76,9 @@ func NewApp() (*App, error) {
 	ollamaHandler := &ollama.Handler{Store: store}
 	webuiHandler := webui.NewHandler()
 	mihomoMgr := mihomo.NewManager(store, pool)
-	adminHandler := &admin.Handler{Store: store, Pool: pool, DS: dsClient, OpenAI: chatHandler, ChatHistory: chatHistoryStore, Mihomo: mihomoMgr, WebUIFallback: webuiHandler.HandleAdminFallback}
+	mihomoMgr.SetProxyReset(dsClient.ResetProxyClients)
+	dsClient.SetNodeFailureReporter(mihomoMgr.ReportUpstreamResult)
+	adminHandler := &admin.Handler{Store: store, Pool: pool, DS: dsClient, OpenAI: chatHandler, ChatHistory: chatHistoryStore, Mihomo: mihomoMgr, ResetProxyClients: dsClient.ResetProxyClients, WebUIFallback: webuiHandler.HandleAdminFallback}
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)

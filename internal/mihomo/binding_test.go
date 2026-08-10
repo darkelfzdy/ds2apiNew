@@ -110,6 +110,9 @@ func TestUnbindAccountReclaimsPortAndProxy(t *testing.T) {
 	if snap.Accounts[0].ProxyID != "" {
 		t.Fatalf("proxy_id not cleared: %q", snap.Accounts[0].ProxyID)
 	}
+	if !snap.Accounts[0].NoProxy {
+		t.Fatal("explicit unbind must set no_proxy")
+	}
 	if len(snap.Proxies) != 0 {
 		t.Fatalf("managed proxy not reclaimed: %+v", snap.Proxies)
 	}

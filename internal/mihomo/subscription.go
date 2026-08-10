@@ -132,17 +132,23 @@ func parseClashYAML(body []byte) ([]config.MihomoNode, error) {
 }
 
 // decodeBase64Loose 尝试多种 Base64 变体解码整段文本（忽略空白换行）。
+// 先快速扫描字符集：只要出现明显不属于 Base64 字母表的字符就立即放弃，
+// 避免对最大 16MB 的普通文本白做多轮全量解码。
 func decodeBase64Loose(raw string) ([]byte, bool) {
 	var b strings.Builder
 	b.Grow(len(raw))
+	plausible := true
 	for _, r := range raw {
 		if r == ' ' || r == '\t' || r == '\r' || r == '\n' {
 			continue
 		}
+		if !isBase64AlphabetChar(r) {
+			plausible = false
+		}
 		b.WriteRune(r)
 	}
 	compact := b.String()
-	if compact == "" {
+	if compact == "" || !plausible {
 		return nil, false
 	}
 	encodings := []*base64.Encoding{
@@ -157,4 +163,15 @@ func decodeBase64Loose(raw string) ([]byte, bool) {
 		}
 	}
 	return nil, false
+}
+
+// isBase64AlphabetChar 判断字符是否可能出现在 Base64 文本中
+// （标准/URL-safe 两种字母表 + 填充符）。
+func isBase64AlphabetChar(r rune) bool {
+	switch {
+	case r >= 'A' && r <= 'Z', r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+		return true
+	default:
+		return r == '+' || r == '/' || r == '-' || r == '_' || r == '='
+	}
 }

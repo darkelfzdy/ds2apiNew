@@ -3,6 +3,7 @@ package mihomo
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"os"
 	"sort"
 	"strconv"
@@ -14,7 +15,7 @@ import (
 
 // 自动巡检调度参数：
 //   - initialSweepDelay：服务启动后首轮"测速 + 自动分配"的触发延迟；
-//   - watcherTickInterval()：后续定时循环节拍（默认 15s，环境变量
+//   - watcherTickInterval()：后续定时循环节拍（默认 60s，环境变量
 //     DS2API_MIHOMO_INTERVAL 可配置，最小 5s）；
 //   - failoverCooldown()：坏节点安全转移后账号的换号冷却期（默认 15 分钟，
 //     环境变量 DS2API_MIHOMO_FAILOVER_COOLDOWN_MINUTES 可配置），
@@ -22,7 +23,7 @@ import (
 //   - selfHealMinInterval：子进程崩溃后自动重启的节流间隔，避免每拍都尝试拉起。
 const (
 	initialSweepDelay       = 5 * time.Second
-	defaultTickInterval     = 15 * time.Second
+	defaultTickInterval     = 60 * time.Second
 	minTickInterval         = 5 * time.Second
 	defaultFailoverCooldown = 15 * time.Minute
 	selfHealMinInterval     = 60 * time.Second
@@ -213,6 +214,10 @@ func (m *Manager) reconcileBindings() bool {
 			continue
 		}
 		if proxyID == "" {
+			// 显式解绑（NoProxy）的账号不补位，尊重用户"不走代理"的选择。
+			if acc.NoProxy {
+				continue
+			}
 			backfills = append(backfills, rebind{identifier: identifier})
 		}
 	}
@@ -284,25 +289,32 @@ func (m *Manager) startWatcher() {
 		return
 	}
 	m.watchOnce.Do(func() {
+		m.watchMu.Lock()
 		stop := make(chan struct{})
 		m.watchStop = stop
+		m.watchMu.Unlock()
 		go m.watcherLoop(stop)
 	})
 }
 
-// stopWatcher 停止后台巡检（幂等）。
+// stopWatcher 停止后台巡检（幂等，watchStop 受锁保护，避免与启动并发写）。
 func (m *Manager) stopWatcher() {
-	if m == nil || m.watchStop == nil {
+	if m == nil {
 		return
 	}
-	close(m.watchStop)
+	m.watchMu.Lock()
+	stop := m.watchStop
 	m.watchStop = nil
+	m.watchMu.Unlock()
+	if stop != nil {
+		close(stop)
+	}
 }
 
 func (m *Manager) watcherLoop(stop chan struct{}) {
 	interval := watcherTickInterval()
 	// 服务启动 5 秒后立即触发第一轮"测速 + 自动分配"，
-	// 之后按 interval（默认 15s，DS2API_MIHOMO_INTERVAL 可配置）定时循环。
+	// 之后按 interval（默认 60s，DS2API_MIHOMO_INTERVAL 可配置）定时循环。
 	initial := time.NewTimer(initialSweepDelay)
 	defer initial.Stop()
 	ticker := time.NewTicker(interval)
@@ -315,6 +327,10 @@ func (m *Manager) watcherLoop(stop chan struct{}) {
 			m.watchTick()
 		case <-ticker.C:
 			m.watchTick()
+		case <-m.reconcileCh:
+			// 真实请求连续失败达到阈值触发：立即调和，不等待下一拍。
+			// reconcileBindings 自带 enabled && auto_bind 门卫，串行于 watcher。
+			m.reconcileBindings()
 		}
 	}
 }
@@ -377,7 +393,13 @@ func (m *Manager) trySelfHeal(snap config.Config) {
 	}
 }
 
-// sweepTargets 汇总本轮需要测速的节点：有账号绑定的节点 ∪ 已标记异常的节点。
+// coldProbePerTick 每轮巡检随机补测的“未绑定”节点数，保持候选池新鲜，
+// 避免新添加/未使用的节点长期停留在 unknown，补位与故障转移时无新鲜数据可用。
+const coldProbePerTick = 10
+
+// sweepTargets 汇总本轮需要测速的节点：
+//   - 有账号绑定的节点 ∪ 已标记异常的节点（必测）；
+//   - 再随机补测最多 coldProbePerTick 个当前未绑定的节点。
 func sweepTargets(snap config.Config, health map[string]NodeHealth) []nodeRef {
 	bound := map[string]struct{}{}
 	for nodeKey := range nodeBoundCounts(snap) {
@@ -393,13 +415,33 @@ func sweepTargets(snap config.Config, health map[string]NodeHealth) []nodeRef {
 		}
 	}
 	out := []nodeRef{}
+	cold := []nodeRef{}
 	for _, sub := range snap.Mihomo.Subscriptions {
 		for _, node := range sub.Nodes {
 			key := config.MihomoNodeKey(sub.ID, node.Name)
 			if _, ok := want[key]; ok {
 				out = append(out, nodeRef{Key: key, Name: node.Name})
+				continue
 			}
+			cold = append(cold, nodeRef{Key: key, Name: node.Name})
 		}
+	}
+	return append(out, sampleNodes(cold, coldProbePerTick)...)
+}
+
+// sampleNodes 从节点列表中随机抽取至多 n 个（len<=n 时原样返回），
+// 保证每轮巡检抽到的未绑定节点不同。
+func sampleNodes(nodes []nodeRef, n int) []nodeRef {
+	if len(nodes) == 0 || n <= 0 {
+		return nil
+	}
+	if len(nodes) <= n {
+		return nodes
+	}
+	perm := rand.Perm(len(nodes))
+	out := make([]nodeRef, 0, n)
+	for i := 0; i < n; i++ {
+		out = append(out, nodes[perm[i]])
 	}
 	return out
 }

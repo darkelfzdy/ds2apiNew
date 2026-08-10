@@ -1,10 +1,16 @@
 package mihomo
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -32,6 +38,9 @@ type procHandle struct {
 type Manager struct {
 	store *config.Store
 	pool  PoolResetter
+	// proxyReset 在绑定/订阅变更后清理 DeepSeek client 侧的按账号代理连接池缓存，
+	// 防止监听端口变化后旧 httpcloak/H2 连接一直被复用。
+	proxyReset func()
 
 	mu          sync.Mutex
 	handle      *procHandle
@@ -41,7 +50,16 @@ type Manager struct {
 	lastErr     string
 	binary      string
 	listenPorts []int
-	applying    bool // 串行化 Apply，避免并发重启竞争
+
+	// Apply 串行化：并发请求等待前一次完成后再执行（而非直接报错），
+	// 保证自动调度/用户操作之间不会互相吞掉应用结果。
+	applyMu   sync.Mutex
+	applyBusy bool
+	applyDone chan struct{}
+
+	// apiSecret 是 mihomo external-controller 的随机口令，写入 runtime.yaml 的
+	// secret 字段，健康探测等控制 API 调用需带 Bearer 鉴权。
+	apiSecret string
 
 	dlMu sync.Mutex
 	dl   downloadState // 内核下载任务状态（独立锁，避免阻塞主状态锁）
@@ -53,11 +71,75 @@ type Manager struct {
 	failStreak  map[string]int
 	lastRestart time.Time // 子进程崩溃自愈的重试节流（避免每 tick 都重启）
 	watchOnce   sync.Once
+	watchMu     sync.Mutex
 	watchStop   chan struct{}
+
+	// 真实请求失败闭环反馈（仅运行时，不落盘）：
+	// realFailStreak 记录节点上真实流量连续失败次数；realLastFail 用于失败去抖
+	// （主传输失败 + fallback 失败在同一请求连发两条只计一次）；realFailMarked
+	// 节流“按真实失败标 fail”的重复落盘；proxyToNode 是托管代理 ID -> 节点键
+	// 的反查缓存（绑定/订阅变更时重建）。
+	realFailStreak map[string]int
+	realLastFail   map[string]time.Time
+	realFailMarked map[string]time.Time
+	proxyToNode    map[string]string
+
+	// reconcileCh 在真实请求连续失败达到阈值时唤醒 watcher 立即调和
+	// （缓冲 1，非阻塞发送，watcherLoop 串行处理，避免在请求路径上直接 Apply）。
+	reconcileCh chan struct{}
 }
 
 func NewManager(store *config.Store, pool PoolResetter) *Manager {
-	return &Manager{store: store, pool: pool, failStreak: map[string]int{}}
+	return &Manager{
+		store:          store,
+		pool:           pool,
+		failStreak:     map[string]int{},
+		apiSecret:      randomAPISecret(),
+		realFailStreak: map[string]int{},
+		realLastFail:   map[string]time.Time{},
+		realFailMarked: map[string]time.Time{},
+		proxyToNode:    map[string]string{},
+		reconcileCh:    make(chan struct{}, 1),
+	}
+}
+
+// randomAPISecret 生成 external-controller 的随机 secret（每次进程重启换新，
+// runtime.yaml 由本 Manager 幂等重写，探活用同一 secret，因此无需持久化）。
+func randomAPISecret() string {
+	buf := make([]byte, 18)
+	if _, err := rand.Read(buf); err != nil {
+		config.Logger.Warn("[mihomo] generate controller secret failed", "error", err)
+		return fmt.Sprintf("ds2api-fallback-%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(buf)
+}
+
+func (m *Manager) getAPISecret() string {
+	if m == nil {
+		return ""
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.apiSecret
+}
+
+func (m *Manager) setAPISecret(secret string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.apiSecret = secret
+	m.mu.Unlock()
+}
+
+// SetProxyReset 挂接代理连接池重置回调（DeepSeek client 侧）。
+func (m *Manager) SetProxyReset(fn func()) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.proxyReset = fn
+	m.mu.Unlock()
 }
 
 // Supported 报告当前部署形态能否拉起子进程（Vercel Serverless 不支持）。
@@ -76,6 +158,7 @@ func (m *Manager) StartIfEnabled() {
 	if !m.Supported() || m == nil || m.store == nil {
 		return
 	}
+	m.rebuildProxyNodeIndex()
 	m.startWatcher()
 	if !m.store.Snapshot().Mihomo.Enabled {
 		return
@@ -89,26 +172,43 @@ func (m *Manager) StartIfEnabled() {
 
 // Apply 依据当前配置重建 runtime.yaml 并（重）启动 mihomo 进程。
 // 配置未启用时确保进程停止。幂等，可被绑定/订阅/设置变更反复触发。
-func (m *Manager) Apply(_ context.Context) error {
+// 并发调用会被串行化：后到的调用等待前一次应用完成后再用最新配置执行，
+// 而不是直接报错——避免自动调度/自动补位误把"配置已保存但未应用"吞掉。
+func (m *Manager) Apply(ctx context.Context) error {
 	if m == nil || m.store == nil {
 		return errors.New("mihomo manager 未初始化")
 	}
 	if !m.Supported() {
 		return errors.New("当前部署形态（Vercel）不支持 Mihomo 子进程")
 	}
-	m.mu.Lock()
-	if m.applying {
-		m.mu.Unlock()
-		return errors.New("另一个应用操作正在进行中")
+	m.applyMu.Lock()
+	for m.applyBusy {
+		done := m.applyDone
+		m.applyMu.Unlock()
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		m.applyMu.Lock()
 	}
-	m.applying = true
-	m.mu.Unlock()
-	defer func() {
-		m.mu.Lock()
-		m.applying = false
-		m.mu.Unlock()
-	}()
+	m.applyBusy = true
+	m.applyDone = make(chan struct{})
+	m.applyMu.Unlock()
 
+	err := m.doApply()
+
+	m.applyMu.Lock()
+	m.applyBusy = false
+	done := m.applyDone
+	m.applyDone = nil
+	m.applyMu.Unlock()
+	close(done)
+	return err
+}
+
+// doApply 是 Apply 的串行执行主体（调用方持有的 Apply 串行锁已排他）。
+func (m *Manager) doApply() error {
 	cfg := m.store.Snapshot()
 	if !cfg.Mihomo.Enabled {
 		m.stopProcess()
@@ -122,27 +222,62 @@ func (m *Manager) Apply(_ context.Context) error {
 		return nil
 	}
 
-	yamlBytes, bindings, err := BuildRuntimeYAML(cfg)
+	yamlBytes, bindings, err := BuildRuntimeYAML(cfg, m.getAPISecret())
 	if err != nil {
 		m.setLastErr(err.Error())
 		return err
 	}
+	ports := make([]int, 0, len(bindings))
+	for _, b := range bindings {
+		ports = append(ports, b.Port)
+	}
+
 	workDir := WorkDir()
-	if err := os.MkdirAll(workDir, 0o755); err != nil {
-		m.setLastErr(err.Error())
-		return fmt.Errorf("创建 mihomo 目录失败: %w", err)
-	}
 	configPath := filepath.Join(workDir, "runtime.yaml")
-	if err := writeFileAtomic(configPath, yamlBytes); err != nil {
-		m.setLastErr(err.Error())
-		return fmt.Errorf("写入 mihomo 配置失败: %w", err)
-	}
 
 	binary, err := resolveBinary(cfg.Mihomo.BinaryPath)
 	if err != nil {
 		m.setLastErr(err.Error())
 		return err
 	}
+
+	// 运行时配置未变化、二进制路径未变且进程仍在运行：跳过重启。否则每次绑定
+	// 变更（含自动故障转移）都会全量重启 mihomo，断开所有账号的在途连接，
+	// 不只被搬动的那个。
+	existing, readErr := os.ReadFile(configPath)
+	m.mu.Lock()
+	running := m.running
+	prevBinary := m.binary
+	m.mu.Unlock()
+	if running && readErr == nil && bytes.Equal(existing, yamlBytes) && prevBinary == binary {
+		m.mu.Lock()
+		m.running = true
+		m.listenPorts = ports
+		m.lastErr = ""
+		m.mu.Unlock()
+		m.rebuildProxyNodeIndex()
+		config.Logger.Info("[mihomo] runtime config unchanged, skip restart", "listeners", len(bindings))
+		return nil
+	}
+
+	// 实际需要（重）启动进程：按文档换新 external-controller secret。
+	// 用新 secret 重新生成配置（跳转路径不换，保证无变化判断稳定）。
+	newSecret := randomAPISecret()
+	yamlBytes, _, err = BuildRuntimeYAML(cfg, newSecret)
+	if err != nil {
+		m.setLastErr(err.Error())
+		return err
+	}
+
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		m.setLastErr(err.Error())
+		return fmt.Errorf("创建 mihomo 目录失败: %w", err)
+	}
+	if err := writeFileAtomic(configPath, yamlBytes); err != nil {
+		m.setLastErr(err.Error())
+		return fmt.Errorf("写入 mihomo 配置失败: %w", err)
+	}
+
 	// 重新应用场景：先停掉旧进程释放其占用的端口，再做端口预检，
 	// 否则我们自己在监听的 api_port/listener 端口会被误判为外部占用，
 	// 导致任何重新应用都必然失败。
@@ -152,21 +287,21 @@ func (m *Manager) Apply(_ context.Context) error {
 		return err
 	}
 
+	// 提交新 secret：旧进程已停止，探活/健康测速会带上与 runtime.yaml 一致的
+	// 新口令，不会因旧口令 401 误判节点失败。
+	m.setAPISecret(newSecret)
 	if err := m.startProcess(binary, workDir, configPath, cfg.Mihomo.APIPort); err != nil {
 		m.setLastErr(err.Error())
 		return err
 	}
 
-	ports := make([]int, 0, len(bindings))
-	for _, b := range bindings {
-		ports = append(ports, b.Port)
-	}
 	m.mu.Lock()
 	m.running = true
 	m.listenPorts = ports
 	m.lastErr = ""
 	m.binary = binary
 	m.mu.Unlock()
+	m.rebuildProxyNodeIndex()
 	config.Logger.Info("[mihomo] bridge applied", "binary", binary, "listeners", len(bindings), "ports", ports)
 	return nil
 }
@@ -323,21 +458,16 @@ func (m *Manager) startProcess(binary, workDir, configPath string, apiPort int) 
 	return m.waitReady(handle, apiPort, 5*time.Second)
 }
 
-// waitReady 轮询 external-controller 端口直到可连接或进程退出。
+// waitReady 轮询 external-controller 端口直到确认是 mihomo 控制面或进程退出。
 func (m *Manager) waitReady(handle *procHandle, apiPort int, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
-	addr := fmt.Sprintf("127.0.0.1:%d", apiPort)
 	for time.Now().Before(deadline) {
 		select {
 		case <-handle.done:
 			return fmt.Errorf("mihomo 启动后立即退出（详见 data/mihomo/mihomo.log）")
 		default:
 		}
-		conn, err := net.DialTimeout("tcp", addr, 300*time.Millisecond)
-		if err == nil {
-			if closeErr := conn.Close(); closeErr != nil {
-				config.Logger.Warn("[mihomo] close probe conn failed", "error", closeErr)
-			}
+		if m.controllerVerified(apiPort) {
 			return nil
 		}
 		time.Sleep(150 * time.Millisecond)
@@ -345,6 +475,52 @@ func (m *Manager) waitReady(handle *procHandle, apiPort int, timeout time.Durati
 	// 进程仍存活但 API 未就绪：视为启动成功（部分构建端口开放较慢）。
 	config.Logger.Warn("[mihomo] external-controller probe timed out; assuming process healthy")
 	return nil
+}
+
+// controllerVerified 确认 external-controller 端口真的是 mihomo 控制面而非其它
+// 占用该端口的进程：TCP 可连 + 带 Bearer 访问 /version 返回合法 JSON。
+// 避免 19090 被其它服务占用时误判“进程在运行”。
+func (m *Manager) controllerVerified(port int) bool {
+	if port <= 0 {
+		return false
+	}
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	conn, err := net.DialTimeout("tcp", addr, 300*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	if closeErr := conn.Close(); closeErr != nil {
+		config.Logger.Warn("[mihomo] close probe conn failed", "error", closeErr)
+	}
+	secret := m.getAPISecret()
+	req, err := http.NewRequest(http.MethodGet, "http://"+addr+"/version", nil)
+	if err != nil {
+		return false
+	}
+	if strings.TrimSpace(secret) != "" {
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(secret))
+	}
+	client := &http.Client{Timeout: 500 * time.Millisecond}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			config.Logger.Warn("[mihomo] close version probe body failed", "error", closeErr)
+		}
+	}()
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+	var payload struct {
+		Version string `json:"version"`
+		Meta    bool   `json:"meta"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&payload); err != nil {
+		return false
+	}
+	return payload.Version != "" || payload.Meta
 }
 
 // stopProcess 终止当前记录的子进程并等待其退出（避免端口占用竞争）。

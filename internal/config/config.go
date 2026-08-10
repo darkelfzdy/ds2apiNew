@@ -54,6 +54,9 @@ type Account struct {
 	// NodeCooldownUntil 是坏节点自动安全转移后账号的换号冷却到期时间（Unix 秒）。
 	// 冷却期内自动调度不会再次切换该账号的节点，避免故障节点间反复横跳。
 	NodeCooldownUntil float64 `json:"node_cooldown_until,omitempty"`
+	// NoProxy 表示账号被显式解绑、强制走直连（不走代理）。置位后自动调度
+	// （auto_bind 补位 / 一键分配）不再给该账号分配节点，直到用户显式重新绑定。
+	NoProxy bool `json:"no_proxy,omitempty"`
 }
 
 type APIKey struct {

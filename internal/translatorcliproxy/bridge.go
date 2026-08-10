@@ -1,7 +1,6 @@
 package translatorcliproxy
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"strings"
@@ -17,34 +16,11 @@ func ToOpenAI(from sdktranslator.Format, model string, raw []byte, stream bool) 
 func FromOpenAINonStream(to sdktranslator.Format, model string, originalReq, translatedReq, raw []byte) []byte {
 	var param any
 	converted := sdktranslator.TranslateNonStream(context.Background(), sdktranslator.FormatOpenAI, to, model, originalReq, translatedReq, raw, &param)
-	usage, ok := extractOpenAIUsageFromJSON(raw)
+	usage, ok := extractOpenAIUsage(raw)
 	if !ok {
 		return converted
 	}
 	return injectNonStreamUsageMetadata(converted, to, usage)
-}
-
-func FromOpenAIStream(to sdktranslator.Format, model string, originalReq, translatedReq, streamBody []byte) []byte {
-	var out bytes.Buffer
-	var param any
-	for _, line := range bytes.Split(streamBody, []byte("\n")) {
-		trimmed := strings.TrimSpace(string(line))
-		if trimmed == "" {
-			continue
-		}
-		payload := append([]byte(nil), line...)
-		if !bytes.HasPrefix(payload, []byte("data:")) {
-			continue
-		}
-		chunks := sdktranslator.TranslateStream(context.Background(), sdktranslator.FormatOpenAI, to, model, originalReq, translatedReq, payload, &param)
-		for i := range chunks {
-			out.Write(chunks[i])
-			if !bytes.HasSuffix(chunks[i], []byte("\n")) {
-				out.WriteByte('\n')
-			}
-		}
-	}
-	return out.Bytes()
 }
 
 func ParseFormat(name string) sdktranslator.Format {
@@ -66,37 +42,6 @@ func ParseFormat(name string) sdktranslator.Format {
 	default:
 		return sdktranslator.FromString(name)
 	}
-}
-
-func ToOpenAIByName(formatName, model string, raw []byte, stream bool) []byte {
-	return ToOpenAI(ParseFormat(formatName), model, raw, stream)
-}
-
-func extractOpenAIUsageFromJSON(raw []byte) (openAIUsage, bool) {
-	payload := map[string]any{}
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return openAIUsage{}, false
-	}
-	usageObj, _ := payload["usage"].(map[string]any)
-	if usageObj == nil {
-		return openAIUsage{}, false
-	}
-	p := toInt(usageObj["prompt_tokens"])
-	c := toInt(usageObj["completion_tokens"])
-	t := toInt(usageObj["total_tokens"])
-	if p <= 0 {
-		p = toInt(usageObj["input_tokens"])
-	}
-	if c <= 0 {
-		c = toInt(usageObj["output_tokens"])
-	}
-	if t <= 0 {
-		t = p + c
-	}
-	if p <= 0 && c <= 0 && t <= 0 {
-		return openAIUsage{}, false
-	}
-	return openAIUsage{PromptTokens: p, CompletionTokens: c, TotalTokens: t}, true
 }
 
 func injectNonStreamUsageMetadata(converted []byte, target sdktranslator.Format, usage openAIUsage) []byte {

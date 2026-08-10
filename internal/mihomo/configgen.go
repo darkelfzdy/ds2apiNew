@@ -88,7 +88,9 @@ func buildProxyList(cfg config.MihomoConfig) []map[string]any {
 //   - listeners: 每个活跃绑定一个 127.0.0.1 的 SOCKS5 入站，
 //     通过 mihomo listener 的 proxy 字段把该入站流量直出到对应节点，
 //     从而实现"一个端口一个出口 IP"。
-func BuildRuntimeYAML(cfg config.Config) ([]byte, []activeBinding, error) {
+//
+// apiSecret 写入 external-controller 的 secret，用于保护控制 API。
+func BuildRuntimeYAML(cfg config.Config, apiSecret string) ([]byte, []activeBinding, error) {
 	mcfg := cfg.Mihomo
 	bindings := collectActiveBindings(cfg)
 
@@ -114,6 +116,11 @@ func BuildRuntimeYAML(cfg config.Config) ([]byte, []activeBinding, error) {
 		"dns":                 map[string]any{"enable": false},
 		// listeners 已带 proxy 直出；兜底规则仅用于非 listener 流量。
 		"rules": []string{"MATCH,DIRECT"},
+	}
+	if apiSecret != "" {
+		// 控制接口权限极大（切换节点、读配置、触发动作），
+		// 即使只绑 127.0.0.1 也必须有 secret，防止本机其它进程越权访问。
+		doc["secret"] = apiSecret
 	}
 	if len(proxies) == 0 {
 		doc["proxies"] = []any{}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -19,6 +20,15 @@ type Store struct {
 	keyToolsMap map[string]bool     // O(1) API key tools_enabled lookup
 	accMap      map[string]int      // O(1) account lookup: identifier -> slice index
 	accTest     map[string]string   // runtime-only account test status cache
+
+	// 持久化脏位：避免每次 Store 变更都全量重写两份文件。
+	// cfgDirty 表示 config.json 需要重写；mihomoDirty 表示
+	// mihomo_subscriptions.json 需要重写（仅订阅/端口映射变化时置位）。
+	// mihomoMigratePending 在加载到 config.json 内嵌旧式订阅时置位，
+	// 下次保存强制同时重写两份文件完成迁移。
+	cfgDirty             bool
+	mihomoDirty          bool
+	mihomoMigratePending bool
 }
 
 func LoadStore() *Store {
@@ -52,7 +62,11 @@ func loadStore() (*Store, error) {
 	if validateErr := ValidateConfig(cfg); validateErr != nil {
 		err = errors.Join(err, validateErr)
 	}
-	return &Store{cfg: cfg, path: ConfigPath(), fromEnv: fromEnv}, err
+	store := &Store{cfg: cfg, path: ConfigPath(), fromEnv: fromEnv}
+	// config.json 仍内嵌旧式 mihomo 订阅时，标记待迁移：
+	// 下次保存强制同时重写 config.json（剔除订阅）与独立订阅文件。
+	store.mihomoMigratePending = !IsVercel() && configFileHasLegacyMihomoSubs(store.path)
+	return store, err
 }
 
 func loadConfig() (Config, bool, error) {
@@ -237,6 +251,8 @@ func (s *Store) Replace(cfg Config) error {
 	cfg.NormalizeCredentials()
 	s.cfg = cfg.Clone()
 	s.rebuildIndexes()
+	s.cfgDirty = true
+	s.mihomoDirty = true
 	return s.saveLocked()
 }
 
@@ -252,7 +268,38 @@ func (s *Store) Update(mutator func(*Config) error) error {
 	cfg.NormalizeCredentials()
 	s.cfg = cfg
 	s.rebuildIndexes()
+	s.markDirty(base, cfg)
 	return s.saveLocked()
+}
+
+// markDirty 根据事务前后配置差异标记持久化脏位：
+// mihomoDirty 仅在订阅/端口映射变化时置位（mihomo_subscriptions.json），
+// cfgDirty 在其它配置变化时置位（config.json）。测速结果等纯 mihomo 数据
+// 更新不再连带重写 config.json。
+func (s *Store) markDirty(base, cfg Config) {
+	if !mihomoSubsEqual(base.Mihomo, cfg.Mihomo) {
+		s.mihomoDirty = true
+	}
+	if !configNonMihomoEqual(base, cfg) {
+		s.cfgDirty = true
+	}
+}
+
+func mihomoSubsEqual(a, b MihomoConfig) bool {
+	if len(a.Subscriptions) != len(b.Subscriptions) || len(a.PortMap) != len(b.PortMap) {
+		return false
+	}
+	return reflect.DeepEqual(a.Subscriptions, b.Subscriptions) && reflect.DeepEqual(a.PortMap, b.PortMap)
+}
+
+// configNonMihomoEqual 比较两份配置中除订阅/端口映射外的其余部分
+// （订阅与端口映射由 mihomo_subscriptions.json 独立持久化，不计入 config.json）。
+func configNonMihomoEqual(a, b Config) bool {
+	a.Mihomo.Subscriptions = nil
+	a.Mihomo.PortMap = nil
+	b.Mihomo.Subscriptions = nil
+	b.Mihomo.PortMap = nil
+	return reflect.DeepEqual(a, b)
 }
 
 func (s *Store) Save() error {
@@ -262,20 +309,10 @@ func (s *Store) Save() error {
 		Logger.Info("[save_config] source from env, skip write")
 		return nil
 	}
-	persistCfg := s.cfg.Clone()
-	persistCfg.ClearAccountTokens()
-	if err := saveMihomoSubscriptionsFile(persistCfg.Mihomo); err != nil {
-		return err
-	}
-	b, err := json.MarshalIndent(persistCfg, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := writeConfigBytes(s.path, b); err != nil {
-		return err
-	}
-	s.fromEnv = false
-	return nil
+	// 显式保存（如配置导入/手动保存）：强制重写两份文件。
+	s.cfgDirty = true
+	s.mihomoDirty = true
+	return s.saveLocked()
 }
 
 func (s *Store) saveLocked() error {
@@ -283,20 +320,39 @@ func (s *Store) saveLocked() error {
 		Logger.Info("[save_config] source from env, skip write")
 		return nil
 	}
+	if s.mihomoDirty || s.mihomoMigratePending {
+		if err := saveMihomoSubscriptionsFile(s.cfg.Mihomo); err != nil {
+			return err
+		}
+		s.mihomoDirty = false
+	}
+	if s.cfgDirty || s.mihomoMigratePending {
+		if err := s.writeConfigJSONLocked(); err != nil {
+			return err
+		}
+		s.cfgDirty = false
+		s.mihomoMigratePending = false
+		s.fromEnv = false
+		return nil
+	}
+	// 主配置文件尚不存在时兜底创建，避免纯 mihomo 变更流程下 config.json 一直缺失。
+	if _, statErr := os.Stat(s.path); os.IsNotExist(statErr) {
+		if err := s.writeConfigJSONLocked(); err != nil {
+			return err
+		}
+		s.fromEnv = false
+	}
+	return nil
+}
+
+func (s *Store) writeConfigJSONLocked() error {
 	persistCfg := s.cfg.Clone()
 	persistCfg.ClearAccountTokens()
-	if err := saveMihomoSubscriptionsFile(persistCfg.Mihomo); err != nil {
-		return err
-	}
 	b, err := json.MarshalIndent(persistCfg, "", "  ")
 	if err != nil {
 		return err
 	}
-	if err := writeConfigBytes(s.path, b); err != nil {
-		return err
-	}
-	s.fromEnv = false
-	return nil
+	return writeConfigBytes(s.path, b)
 }
 
 func (s *Store) IsEnvBacked() bool {

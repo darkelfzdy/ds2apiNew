@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -125,5 +126,28 @@ func TestProgressReader(t *testing.T) {
 	}
 	if read != 11 || lastN != 11 || lastTotal != 11 {
 		t.Fatalf("progress mismatch: read=%d lastN=%d total=%d", read, lastN, lastTotal)
+	}
+}
+
+func TestCopyBoundedAllowsWithinLimit(t *testing.T) {
+	var buf bytes.Buffer
+	n, err := copyBounded(&buf, strings.NewReader("hi"), 3)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if n != 2 || buf.String() != "hi" {
+		t.Fatalf("unexpected copy: n=%d content=%q", n, buf.String())
+	}
+}
+
+func TestCopyBoundedRejectsOverflow(t *testing.T) {
+	var buf bytes.Buffer
+	_, err := copyBounded(&buf, strings.NewReader("hello"), 3)
+	if !errors.Is(err, errContentTooLarge) {
+		t.Fatalf("expected errContentTooLarge, got %v", err)
+	}
+	// 恰好读到 max+1 字节后即停止，不会读穿整个源。
+	if buf.Len() != 4 {
+		t.Fatalf("expected reads bounded to max+1, wrote %d bytes", buf.Len())
 	}
 }

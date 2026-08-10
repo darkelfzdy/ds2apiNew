@@ -193,6 +193,9 @@ func runBinaryDownload(target, asset, version string, onProgress func(downloaded
 		if removeErr := os.Remove(partPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 			config.Logger.Warn("[mihomo] remove download part failed", "error", removeErr)
 		}
+		if removeErr := os.Remove(tmpPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			config.Logger.Warn("[mihomo] remove temp binary failed", "error", removeErr)
+		}
 		return err
 	}
 	if removeErr := os.Remove(partPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
@@ -265,7 +268,7 @@ func downloadURL(dst, url string, onProgress func(downloaded, total int64)) erro
 	if err != nil {
 		return err
 	}
-	written, copyErr := io.Copy(out, &progressReader{r: resp.Body, total: total, onProgress: onProgress})
+	_, copyErr := copyBounded(out, &progressReader{r: resp.Body, total: total, onProgress: onProgress}, downloadMaxBytes)
 	if closeErr := out.Close(); closeErr != nil {
 		config.Logger.Warn("[mihomo] close download output failed", "error", closeErr)
 	}
@@ -273,13 +276,10 @@ func downloadURL(dst, url string, onProgress func(downloaded, total int64)) erro
 		if removeErr := os.Remove(dst); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 			config.Logger.Warn("[mihomo] remove partial download failed", "error", removeErr)
 		}
-		return fmt.Errorf("写入下载内容失败: %w", copyErr)
-	}
-	if written > downloadMaxBytes {
-		if removeErr := os.Remove(dst); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-			config.Logger.Warn("[mihomo] remove oversized download failed", "error", removeErr)
+		if errors.Is(copyErr, errContentTooLarge) {
+			return errors.New("下载内容过大")
 		}
-		return fmt.Errorf("下载内容过大")
+		return fmt.Errorf("写入下载内容失败: %w", copyErr)
 	}
 	return nil
 }
@@ -299,6 +299,22 @@ func (p *progressReader) Read(b []byte) (int, error) {
 		p.onProgress(p.n, p.total)
 	}
 	return n, err
+}
+
+// errContentTooLarge 标记内容超出大小限制（异常响应 / 解压膨胀）。
+var errContentTooLarge = errors.New("内容超出大小限制")
+
+// copyBounded 最多从 src 复制 max 字节到 dst；超出立即返回错误并停止读取，
+// 防止异常响应或解压炸弹把无限内容撑爆磁盘（Content-Length 未知时尤其关键）。
+func copyBounded(dst io.Writer, src io.Reader, max int64) (int64, error) {
+	written, err := io.Copy(dst, io.LimitReader(src, max+1))
+	if err != nil {
+		return written, err
+	}
+	if written > max {
+		return written, errContentTooLarge
+	}
+	return written, nil
 }
 
 // extractBinary 从 zip / gzip 中解出 mihomo 可执行文件写到 destPath。
@@ -338,14 +354,17 @@ func extractFromZip(archivePath, destPath string) error {
 			}
 			return err
 		}
-		_, copyErr := io.Copy(out, rc)
+		_, copyErr := copyBounded(out, rc, downloadMaxBytes)
 		if closeErr := out.Close(); closeErr != nil {
 			config.Logger.Warn("[mihomo] close binary output failed", "error", closeErr)
 		}
 		if closeErr := rc.Close(); closeErr != nil {
 			config.Logger.Warn("[mihomo] close zip entry failed", "error", closeErr)
 		}
-		return copyErr
+		if copyErr != nil {
+			return fmt.Errorf("解压 mihomo 二进制失败: %w", copyErr)
+		}
+		return nil
 	}
 	return errors.New("压缩包中未找到 mihomo 可执行文件")
 }
@@ -372,7 +391,7 @@ func extractFromGzip(archivePath, destPath string) error {
 		}
 		return err
 	}
-	_, copyErr := io.Copy(out, io.LimitReader(gz, downloadMaxBytes))
+	_, copyErr := copyBounded(out, gz, downloadMaxBytes)
 	if closeErr := out.Close(); closeErr != nil {
 		config.Logger.Warn("[mihomo] close binary output failed", "error", closeErr)
 	}

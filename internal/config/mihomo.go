@@ -120,12 +120,14 @@ func MihomoNodeKey(subID, nodeName string) string {
 }
 
 // SplitMihomoNodeKey 拆解节点键，非法键返回两个空串。
+// subID 是受控生成的标识（形如 sub-<hash>，不含 "::"），因此首个 "::"
+// 即为分隔符；节点名可任意包含 "::"，按首处分隔即可完整保留节点名。
 func SplitMihomoNodeKey(key string) (subID, nodeName string) {
-	idx := strings.Index(key, "::")
-	if idx <= 0 || idx+2 >= len(key) {
+	subID, nodeName, found := strings.Cut(key, "::")
+	if !found || subID == "" || nodeName == "" {
 		return "", ""
 	}
-	return key[:idx], key[idx+2:]
+	return subID, nodeName
 }
 
 // MihomoManagedProxyID 返回节点对应的托管代理 ID（稳定哈希）。
@@ -175,7 +177,10 @@ func (m MihomoConfig) SortedPortMapKeys() []string {
 }
 
 // AllocateMihomoPort 为节点键分配一个本地端口；已分配则原样返回。
-// 从 BasePort 起跳过已被 PortMap 占用的端口。
+// 从 BasePort 起递增，跳过已被 PortMap 占用的端口，并始终预留
+// external-controller（APIPort）。否则当 api_port 落在
+// [base_port, base_port+已分配数) 区间内时，后续分配会撞上 mihomo
+// 自身监听的 api_port，导致下一次 Apply 因"端口被占用"而失败。
 func (m *MihomoConfig) AllocateMihomoPort(nodeKey string) int {
 	if m.PortMap == nil {
 		m.PortMap = map[string]int{}
@@ -183,9 +188,12 @@ func (m *MihomoConfig) AllocateMihomoPort(nodeKey string) int {
 	if port, ok := m.PortMap[nodeKey]; ok && port > 0 {
 		return port
 	}
-	used := make(map[int]struct{}, len(m.PortMap))
+	used := make(map[int]struct{}, len(m.PortMap)+1)
 	for _, port := range m.PortMap {
 		used[port] = struct{}{}
+	}
+	if m.APIPort > 0 {
+		used[m.APIPort] = struct{}{}
 	}
 	base := m.BasePort
 	if base <= 0 {

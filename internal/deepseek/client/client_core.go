@@ -31,6 +31,11 @@ type Client struct {
 
 	proxyClientsMu sync.RWMutex
 	proxyClients   map[string]requestClients
+
+	// nodeReporter 在每次经代理的上游请求完成后回调“代理 ID + 成败”，
+	// 供 mihomo 代理桥把真实流量结果闭环反馈到节点健康。
+	nodeReporterMu sync.RWMutex
+	nodeReporter   func(proxyID string, success bool)
 }
 
 func NewClient(store *config.Store, resolver *auth.Resolver) *Client {

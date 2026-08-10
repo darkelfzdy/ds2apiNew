@@ -2,6 +2,7 @@ package mihomo
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"path/filepath"
 	"strings"
@@ -52,7 +53,7 @@ func nodeKeys3() (hk, jp, us string) {
 }
 
 func markHealth(m *Manager, key, status string, latency, streak int) {
-	m.SetNodeHealth(key, NodeHealth{
+	m.setNodeHealth(key, NodeHealth{
 		Status:     status,
 		LatencyMS:  latency,
 		FailStreak: streak,
@@ -231,6 +232,73 @@ func TestReconcileRequiresAutoBind(t *testing.T) {
 	}
 }
 
+func TestReconcileSkipsManuallyUnboundAccount(t *testing.T) {
+	store := newAutoBindTestStore(t)
+	mgr := NewManager(store, nil)
+	hk, jp, _ := nodeKeys3()
+
+	// b 绑定到 hk（避免 reconcile 为 b 补位）；a 绑定后显式解绑（NoProxy）。
+	if err := mgr.BindAccount(context.Background(), "b@test.com", hk); err != nil {
+		t.Fatalf("bind b failed: %v", err)
+	}
+	if err := mgr.BindAccount(context.Background(), "a@test.com", hk); err != nil {
+		t.Fatalf("bind a failed: %v", err)
+	}
+	if err := mgr.BindAccount(context.Background(), "a@test.com", ""); err != nil {
+		t.Fatalf("unbind a failed: %v", err)
+	}
+	acc, ok := store.FindAccount("a@test.com")
+	if !ok || !acc.NoProxy {
+		t.Fatal("manual unbind must set no_proxy")
+	}
+	enableAutoBridge(t, store)
+	markHealth(mgr, jp, NodeHealthOK, 50, 0)
+
+	if mgr.reconcileBindings() {
+		t.Fatal("reconcile must not reassign a manually unbound account")
+	}
+	if got := accountProxyID(t, store, "a@test.com"); got != "" {
+		t.Fatalf("manually unbound account must stay unbound, got %q", got)
+	}
+
+	// 显式重新绑定节点后，账号重新纳入自动调度。
+	if err := mgr.BindAccount(context.Background(), "a@test.com", jp); err != nil {
+		t.Fatalf("rebind failed: %v", err)
+	}
+	acc, _ = store.FindAccount("a@test.com")
+	if acc.NoProxy {
+		t.Fatal("explicit rebind must clear no_proxy")
+	}
+}
+
+func TestAssignAccountsSkipsManuallyUnboundAccount(t *testing.T) {
+	store := newBindingTestStore(t)
+	mgr := NewManager(store, nil)
+	hk, jp, _ := nodeKeys3()
+
+	if err := mgr.BindAccount(context.Background(), "b@test.com", hk); err != nil {
+		t.Fatalf("bind failed: %v", err)
+	}
+	if err := mgr.BindAccount(context.Background(), "b@test.com", ""); err != nil {
+		t.Fatalf("unbind failed: %v", err)
+	}
+	markHealth(mgr, jp, NodeHealthOK, 40, 0)
+
+	bound, err := mgr.AssignAccounts(context.Background(), []string{jp})
+	if err != nil {
+		t.Fatalf("assign failed: %v", err)
+	}
+	if bound != 1 {
+		t.Fatalf("expected 1 bound (manually unbound account skipped), got %d", bound)
+	}
+	if got := accountProxyID(t, store, "a@test.com"); got != config.MihomoManagedProxyID(jp) {
+		t.Fatalf("a@test.com should be assigned, got %q", got)
+	}
+	if got := accountProxyID(t, store, "b@test.com"); got != "" {
+		t.Fatalf("manually unbound account must be skipped by one-click assign, got %q", got)
+	}
+}
+
 func TestListNodesExposesHealth(t *testing.T) {
 	store := newAutoBindTestStore(t)
 	mgr := NewManager(store, nil)
@@ -377,6 +445,101 @@ func TestReconcileFailoverCooldownBlocksRepeatedMove(t *testing.T) {
 	}
 	if got := accountProxyID(t, store, "a@test.com"); got != config.MihomoManagedProxyID(us) {
 		t.Fatalf("a@test.com should move to 美国 01 after cooldown, got %q", got)
+	}
+}
+
+func TestReportUpstreamFailureMarksNodeAndTriggersReconcile(t *testing.T) {
+	store := newAutoBindTestStore(t)
+	mgr := NewManager(store, nil)
+	hk, jp, _ := nodeKeys3()
+
+	if err := mgr.BindAccount(context.Background(), "a@test.com", hk); err != nil {
+		t.Fatalf("bind failed: %v", err)
+	}
+	enableAutoBridge(t, store)
+	markHealth(mgr, jp, NodeHealthOK, 50, 0)
+	t.Setenv("DS2API_MIHOMO_FAIL_THRESHOLD", "1")
+
+	// 单次真实请求失败即达到阈值：节点应被立即标 fail。
+	proxyID := accountProxyID(t, store, "a@test.com")
+	mgr.ReportUpstreamResult(proxyID, false)
+	if h := mgr.NodeHealthMap()[hk]; h.Status != NodeHealthFail {
+		t.Fatalf("node should be marked fail by real traffic, got %+v", h)
+	}
+
+	// watcher 消费触发信号后立即调和：账号转移到健康节点，不等下一拍巡检。
+	if !mgr.reconcileBindings() {
+		t.Fatal("expected immediate reconcile after real failure feedback")
+	}
+	if got := accountProxyID(t, store, "a@test.com"); got != config.MihomoManagedProxyID(jp) {
+		t.Fatalf("account should fail over immediately, got %q", got)
+	}
+}
+
+func TestReportUpstreamSuccessResetsRealFailFeedback(t *testing.T) {
+	store := newAutoBindTestStore(t)
+	mgr := NewManager(store, nil)
+	hk, _, _ := nodeKeys3()
+
+	if err := mgr.BindAccount(context.Background(), "a@test.com", hk); err != nil {
+		t.Fatalf("bind failed: %v", err)
+	}
+	enableAutoBridge(t, store)
+	t.Setenv("DS2API_MIHOMO_FAIL_THRESHOLD", "2")
+
+	proxyID := accountProxyID(t, store, "a@test.com")
+	mgr.ReportUpstreamResult(proxyID, false) // streak=1
+	mgr.ReportUpstreamResult(proxyID, true)  // 成功清零
+	mgr.ReportUpstreamResult(proxyID, false) // streak=1，未达阈值
+
+	if h := mgr.NodeHealthMap()[hk]; h.Status == NodeHealthFail {
+		t.Fatalf("successful request must reset real failure feedback, got %+v", h)
+	}
+}
+
+func TestReportUpstreamIgnoresNonManagedProxy(t *testing.T) {
+	store := newAutoBindTestStore(t)
+	mgr := NewManager(store, nil)
+	t.Setenv("DS2API_MIHOMO_FAIL_THRESHOLD", "1")
+
+	// 手动代理 ID 不属于 mihomo 托管：不得影响任何节点健康。
+	mgr.ReportUpstreamResult("manual-1", false)
+	for key, h := range mgr.NodeHealthMap() {
+		if h.Status == NodeHealthFail {
+			t.Fatalf("non-managed proxy must be ignored, node %s got %+v", key, h)
+		}
+	}
+}
+
+func TestSweepTargetsSweepsAllUnboundNodes(t *testing.T) {
+	store := newAutoBindTestStore(t)
+	snap := store.Snapshot()
+
+	targets := sweepTargets(snap, map[string]NodeHealth{})
+	if len(targets) != 3 {
+		t.Fatalf("unbound nodes should all be swept, got %d: %v", len(targets), targets)
+	}
+}
+
+func TestSweepTargetsCapsColdProbeSample(t *testing.T) {
+	store := newAutoBindTestStore(t)
+	if err := store.Update(func(c *config.Config) error {
+		nodes := c.Mihomo.Subscriptions[0].Nodes
+		for i := 0; i < 20; i++ {
+			name := fmt.Sprintf("冷节点 %02d", i)
+			nodes = append(nodes, config.MihomoNode{Name: name, Type: "ss", Raw: map[string]any{
+				"name": name, "type": "ss", "server": "cold.example.com", "port": 8388,
+			}})
+		}
+		c.Mihomo.Subscriptions[0].Nodes = nodes
+		return nil
+	}); err != nil {
+		t.Fatalf("seed nodes failed: %v", err)
+	}
+
+	targets := sweepTargets(store.Snapshot(), map[string]NodeHealth{})
+	if len(targets) != coldProbePerTick {
+		t.Fatalf("cold probe should be capped at %d, got %d", coldProbePerTick, len(targets))
 	}
 }
 

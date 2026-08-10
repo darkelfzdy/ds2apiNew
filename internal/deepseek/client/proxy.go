@@ -176,12 +176,12 @@ func (c *Client) requestClientsForAccount(acc config.Account) requestClients {
 	}
 
 	proxyURL := httpCloakProxyURL(proxyCfg)
-	bundle := c.decorate(requestClients{
+	bundle := c.reportingBundle(proxyCfg.ID, c.decorate(requestClients{
 		regular:   trans.NewWithProxy(60*time.Second, proxyURL),
 		stream:    trans.NewWithProxy(0, proxyURL),
 		fallback:  trans.NewFallbackClient(60*time.Second, dialContext),
 		fallbackS: trans.NewFallbackClient(0, dialContext),
-	})
+	}))
 
 	c.proxyClientsMu.Lock()
 	if c.proxyClients == nil {
@@ -190,6 +190,87 @@ func (c *Client) requestClientsForAccount(acc config.Account) requestClients {
 	c.proxyClients[key] = bundle
 	c.proxyClientsMu.Unlock()
 	return bundle
+}
+
+// ResetProxyClients 丢弃已缓存的按账号代理客户端并关闭其空闲连接。
+// 代理配置（host/port/凭据）变化后必须调用，否则旧 httpcloak/H2 连接池
+// 与 fallback http.Transport 会持续泄漏，且配置改回原值时还会复用失效拨号器。
+func (c *Client) ResetProxyClients() {
+	if c == nil {
+		return
+	}
+	c.proxyClientsMu.Lock()
+	old := c.proxyClients
+	c.proxyClients = map[string]requestClients{}
+	c.proxyClientsMu.Unlock()
+	for _, bundle := range old {
+		closeRequestClientsIdle(bundle)
+	}
+}
+
+// closeRequestClientsIdle 关闭一组代理客户端底层 transport 的空闲连接。
+func closeRequestClientsIdle(bundle requestClients) {
+	type idleCloser interface{ CloseIdleConnections() }
+	for _, doer := range []trans.Doer{bundle.regular, bundle.stream, bundle.fallback, bundle.fallbackS} {
+		if closer, ok := doer.(idleCloser); ok {
+			closer.CloseIdleConnections()
+		}
+	}
+}
+
+// reportDoer 把单次上游请求的传输层成败回调给节点健康反馈（mihomo 桥）。
+// Do 返回错误视为该出口真实失败；成功（含主传输失败后 fallback 成功）视为
+// 节点可达，由桥侧清零该节点的真实失败计数。
+type reportDoer struct {
+	inner   trans.Doer
+	proxyID string
+	report  func(proxyID string, success bool)
+}
+
+func (d reportDoer) Do(req *http.Request) (*http.Response, error) {
+	resp, err := d.inner.Do(req)
+	if d.report != nil && d.proxyID != "" {
+		d.report(d.proxyID, err == nil)
+	}
+	return resp, err
+}
+
+func (d reportDoer) CloseIdleConnections() {
+	type idleCloser interface{ CloseIdleConnections() }
+	if closer, ok := d.inner.(idleCloser); ok {
+		closer.CloseIdleConnections()
+	}
+}
+
+// reportingBundle 为已装饰的代理客户端包一层成功/失败上报。
+// 无上报回调或非代理路径（proxyID 为空）时原样返回。
+func (c *Client) reportingBundle(proxyID string, bundle requestClients) requestClients {
+	if proxyID == "" {
+		return bundle
+	}
+	c.nodeReporterMu.RLock()
+	fn := c.nodeReporter
+	c.nodeReporterMu.RUnlock()
+	if fn == nil {
+		return bundle
+	}
+	return requestClients{
+		regular:   reportDoer{inner: bundle.regular, proxyID: proxyID, report: fn},
+		stream:    reportDoer{inner: bundle.stream, proxyID: proxyID, report: fn},
+		fallback:  reportDoer{inner: bundle.fallback, proxyID: proxyID, report: fn},
+		fallbackS: reportDoer{inner: bundle.fallbackS, proxyID: proxyID, report: fn},
+	}
+}
+
+// SetNodeFailureReporter 挂接真实上游请求结果回调（mihomo 桥侧实现，
+// 用于把请求成败闭环反馈到节点健康）。
+func (c *Client) SetNodeFailureReporter(fn func(proxyID string, success bool)) {
+	if c == nil {
+		return
+	}
+	c.nodeReporterMu.Lock()
+	c.nodeReporter = fn
+	c.nodeReporterMu.Unlock()
 }
 
 func applyProxyConnectivityHeaders(req *http.Request) {

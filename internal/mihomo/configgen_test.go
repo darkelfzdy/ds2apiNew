@@ -1,6 +1,7 @@
 package mihomo
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -47,7 +48,7 @@ func testConfigWithBinding() config.Config {
 
 func TestBuildRuntimeYAMLWithBinding(t *testing.T) {
 	cfg := testConfigWithBinding()
-	out, bindings, err := BuildRuntimeYAML(cfg)
+	out, bindings, err := BuildRuntimeYAML(cfg, "test-controller-secret")
 	if err != nil {
 		t.Fatalf("build failed: %v", err)
 	}
@@ -61,6 +62,9 @@ func TestBuildRuntimeYAMLWithBinding(t *testing.T) {
 	}
 	if got := doc["external-controller"]; got != "127.0.0.1:19090" {
 		t.Fatalf("external-controller mismatch: %v", got)
+	}
+	if got := doc["secret"]; got != "test-controller-secret" {
+		t.Fatalf("external-controller secret missing or wrong: %v", got)
 	}
 	proxies, ok := doc["proxies"].([]any)
 	if !ok || len(proxies) != 2 {
@@ -108,7 +112,7 @@ func TestBuildRuntimeYAMLSameNodeNameAcrossSubs(t *testing.T) {
 			PortMap: map[string]int{nodeKey1: 10801, nodeKey2: 10802},
 		},
 	}
-	out, bindings, err := BuildRuntimeYAML(cfg)
+	out, bindings, err := BuildRuntimeYAML(cfg, "test-controller-secret")
 	if err != nil {
 		t.Fatalf("build failed: %v", err)
 	}
@@ -150,7 +154,7 @@ func TestBuildRuntimeYAMLNoBindings(t *testing.T) {
 	cfg := testConfigWithBinding()
 	// 去掉账号引用后，不应再生成 listener。
 	cfg.Accounts[0].ProxyID = ""
-	out, bindings, err := BuildRuntimeYAML(cfg)
+	out, bindings, err := BuildRuntimeYAML(cfg, "test-controller-secret")
 	if err != nil {
 		t.Fatalf("build failed: %v", err)
 	}
@@ -205,5 +209,42 @@ func TestAllocateMihomoPortSkipsUsed(t *testing.T) {
 	}
 	if !strings.HasPrefix(config.MihomoManagedProxyID("sub-1::A"), config.MihomoManagedProxyPrefix) {
 		t.Fatal("managed proxy id prefix mismatch")
+	}
+}
+
+// TestAllocateMihomoPortSkipsAPIPort 回归：api_port 落在节点端口区间内时，
+// 后续分配必须跳过该端口，否则第 N+1 个绑定会撞上 mihomo 自身监听的
+// external-controller 端口，导致下一次 Apply 因端口被占用而失败。
+func TestAllocateMihomoPortSkipsAPIPort(t *testing.T) {
+	m := config.MihomoConfig{BasePort: config.DefaultMihomoBasePort, APIPort: config.DefaultMihomoBasePort + 2}
+	// 分配数量越过 api_port（base+2）后，后续分配不得返回 api_port。
+	seen := map[int]struct{}{}
+	for i := 0; i < 5; i++ {
+		p := m.AllocateMihomoPort(fmt.Sprintf("sub-1::N%02d", i))
+		if p == m.APIPort {
+			t.Fatalf("allocation must never reuse api_port %d, got %d", m.APIPort, p)
+		}
+		if _, dup := seen[p]; dup {
+			t.Fatalf("duplicate port allocation %d", p)
+		}
+		seen[p] = struct{}{}
+	}
+	// 已有分配且等于 api_port 的历史脏数据（理论上被校验拒绝）不在此场景。
+}
+
+// TestSplitMihomoNodeKeyWithColonsInNodeName 回归：节点名允许包含 "::"，
+// 反向拆解必须按首个 "::" 分隔并完整保留节点名，不得截断。
+func TestSplitMihomoNodeKeyWithColonsInNodeName(t *testing.T) {
+	nodeName := "香港::双线 01"
+	key := config.MihomoNodeKey("sub-1", nodeName)
+	sub, name := config.SplitMihomoNodeKey(key)
+	if sub != "sub-1" || name != nodeName {
+		t.Fatalf("split mismatch: sub=%q name=%q", sub, name)
+	}
+	if sub, name := config.SplitMihomoNodeKey("no-delimiter"); sub != "" || name != "" {
+		t.Fatalf("expected empty split for malformed key, got %q %q", sub, name)
+	}
+	if sub, name := config.SplitMihomoNodeKey("sub-1::"); sub != "" || name != "" {
+		t.Fatalf("expected empty split for empty node name, got %q %q", sub, name)
 	}
 }

@@ -29,6 +29,10 @@ type MihomoConfig struct {
 	APIPort       int                  `json:"api_port,omitempty"`
 	Subscriptions []MihomoSubscription `json:"subscriptions,omitempty"`
 	PortMap       map[string]int       `json:"port_map,omitempty"`
+	// AutoBind 开启自动故障转移与弹性号池补位挂载：
+	// 后台巡检定期测速已绑定节点，节点失效时自动把账号切到健康节点，
+	// 新启用（或补位上线的弹性号池账号）且未配置代理的账号自动分配健康节点。
+	AutoBind bool `json:"auto_bind,omitempty"`
 }
 
 // MihomoSubscription 是一个机场订阅及其最近一次解析出的节点缓存。
@@ -42,10 +46,16 @@ type MihomoSubscription struct {
 
 // MihomoNode 是一个 Clash/Mihomo 节点。Raw 保存原始 proxy map，
 // 生成 mihomo 运行时配置时原样写回，避免逐字段建模各协议细节。
+// Status/LatencyMS/Error/TestedAt 是最近一次测速结果，直接挂在节点上，
+// 随订阅一起持久化到 mihomo_subscriptions.json，重启后不丢失。
 type MihomoNode struct {
-	Name string         `json:"name"`
-	Type string         `json:"type"`
-	Raw  map[string]any `json:"raw,omitempty"`
+	Name      string         `json:"name"`
+	Type      string         `json:"type"`
+	Raw       map[string]any `json:"raw,omitempty"`
+	Status    string         `json:"health,omitempty"`
+	LatencyMS int            `json:"latency_ms,omitempty"`
+	Error     string         `json:"health_error,omitempty"`
+	TestedAt  int64          `json:"tested_at,omitempty"`
 }
 
 // MarshalJSON 序列化 Mihomo 配置时剔除订阅与端口映射：
@@ -59,11 +69,13 @@ func (m MihomoConfig) MarshalJSON() ([]byte, error) {
 		BinaryPath string `json:"binary_path,omitempty"`
 		BasePort   int    `json:"base_port,omitempty"`
 		APIPort    int    `json:"api_port,omitempty"`
+		AutoBind   bool   `json:"auto_bind,omitempty"`
 	}{
 		Enabled:    m.Enabled,
 		BinaryPath: m.BinaryPath,
 		BasePort:   m.BasePort,
 		APIPort:    m.APIPort,
+		AutoBind:   m.AutoBind,
 	}
 	return json.Marshal(aux)
 }
@@ -93,6 +105,7 @@ func NormalizeMihomoConfig(m MihomoConfig) MihomoConfig {
 // IsZeroMihomoConfig 判断归一化后的配置是否等价于未配置（默认值不计）。
 func IsZeroMihomoConfig(m MihomoConfig) bool {
 	return !m.Enabled &&
+		!m.AutoBind &&
 		m.BinaryPath == "" &&
 		(m.BasePort == 0 || m.BasePort == DefaultMihomoBasePort) &&
 		(m.APIPort == 0 || m.APIPort == DefaultMihomoAPIPort) &&

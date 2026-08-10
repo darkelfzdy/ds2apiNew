@@ -57,22 +57,25 @@ func collectActiveBindings(cfg config.Config) []activeBinding {
 	return out
 }
 
-// buildProxyList 合并所有订阅的节点（跨订阅按名称去重，先到先得），
-// 供 mihomo 运行时配置的 proxies 段使用。
+// buildProxyList 合并所有订阅的节点，供 mihomo 运行时配置的 proxies 段使用。
+// proxy 名称使用 "subID::nodeName"（与 MihomoNodeKey 一致），保证跨订阅
+// 同名节点不冲突——否则两个订阅都叫 "香港 01" 时会被去重成一个 proxy，
+// 两个账号的 listener 会静默走同一个出口节点，"一号一 IP"失效。
 func buildProxyList(cfg config.MihomoConfig) []map[string]any {
 	seen := map[string]struct{}{}
 	out := []map[string]any{}
 	for _, sub := range cfg.Subscriptions {
 		for _, node := range sub.Nodes {
-			if _, dup := seen[node.Name]; dup {
+			name := config.MihomoNodeKey(sub.ID, node.Name)
+			if _, dup := seen[name]; dup {
 				continue
 			}
-			seen[node.Name] = struct{}{}
+			seen[name] = struct{}{}
 			raw := make(map[string]any, len(node.Raw)+2)
 			for k, v := range node.Raw {
 				raw[k] = v
 			}
-			raw["name"] = node.Name
+			raw["name"] = name
 			raw["type"] = node.Type
 			out = append(out, raw)
 		}
@@ -81,10 +84,10 @@ func buildProxyList(cfg config.MihomoConfig) []map[string]any {
 }
 
 // BuildRuntimeYAML 生成 mihomo 运行时配置：
-//   - proxies: 全部订阅节点
+//   - proxies: 全部订阅节点（名称用 "subID::nodeName" 保证跨订阅唯一）
 //   - listeners: 每个活跃绑定一个 127.0.0.1 的 SOCKS5 入站，
 //     通过 mihomo listener 的 proxy 字段把该入站流量直出到对应节点，
-//     从而实现“一个端口一个出口 IP”。
+//     从而实现"一个端口一个出口 IP"。
 func BuildRuntimeYAML(cfg config.Config) ([]byte, []activeBinding, error) {
 	mcfg := cfg.Mihomo
 	bindings := collectActiveBindings(cfg)
@@ -97,7 +100,7 @@ func BuildRuntimeYAML(cfg config.Config) ([]byte, []activeBinding, error) {
 			"listen": "127.0.0.1",
 			"port":   b.Port,
 			"udp":    true,
-			"proxy":  b.NodeName,
+			"proxy":  b.NodeKey, // proxy 名与 buildProxyList 的限定名一致
 		})
 	}
 

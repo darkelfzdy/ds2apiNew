@@ -41,7 +41,7 @@ function InfoRow({ label, value, mono = true }) {
 
 export default function MihomoStatusCard({ status, busy, onSaveSettings, onApply, onDownloadBinary }) {
     const { t } = useI18n()
-    const [form, setForm] = useState({ enabled: false, binary_path: '', base_port: 0, api_port: 0 })
+    const [form, setForm] = useState({ enabled: false, binary_path: '', base_port: 0, api_port: 0, auto_bind: false })
 
     useEffect(() => {
         if (!status) return
@@ -50,6 +50,7 @@ export default function MihomoStatusCard({ status, busy, onSaveSettings, onApply
             binary_path: status.binary_path || '',
             base_port: status.base_port || 0,
             api_port: status.api_port || 0,
+            auto_bind: Boolean(status.auto_bind),
         })
     }, [status])
 
@@ -71,27 +72,29 @@ export default function MihomoStatusCard({ status, busy, onSaveSettings, onApply
                     </div>
                     <p className="text-sm text-muted-foreground mt-1">{t('mihomoBridge.statusDesc')}</p>
                 </div>
-                {!binaryFound && (
+                <div className="flex items-center gap-2 shrink-0">
+                    {!binaryFound && (
+                        <button
+                            onClick={onDownloadBinary}
+                            disabled={downloading || !status?.supported}
+                            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors font-medium text-sm disabled:opacity-50"
+                            title={t('mihomoBridge.downloadHint')}
+                        >
+                            {downloading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                            {downloading
+                                ? t('mihomoBridge.downloading', { progress: downloadProgress })
+                                : t('mihomoBridge.downloadAction')}
+                        </button>
+                    )}
                     <button
-                        onClick={onDownloadBinary}
-                        disabled={downloading || !status?.supported}
-                        className="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors font-medium text-sm disabled:opacity-50"
-                        title={t('mihomoBridge.downloadHint')}
+                        onClick={onApply}
+                        disabled={applying || !status?.supported}
+                        className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border hover:bg-secondary transition-colors font-medium text-sm disabled:opacity-50"
                     >
-                        {downloading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-                        {downloading
-                            ? t('mihomoBridge.downloading', { progress: downloadProgress })
-                            : t('mihomoBridge.downloadAction')}
+                        {applying ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                        {applying ? t('mihomoBridge.applying') : t('mihomoBridge.applyAction')}
                     </button>
-                )}
-                <button
-                    onClick={onApply}
-                    disabled={applying || !status?.supported}
-                    className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border hover:bg-secondary transition-colors font-medium text-sm disabled:opacity-50"
-                >
-                    {applying ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                    {applying ? t('mihomoBridge.applying') : t('mihomoBridge.applyAction')}
-                </button>
+                </div>
             </div>
 
             <div className="p-6 grid gap-6 lg:grid-cols-[1fr_280px]">
@@ -105,6 +108,21 @@ export default function MihomoStatusCard({ status, busy, onSaveSettings, onApply
                         />
                         <Power className="w-4 h-4 text-muted-foreground" />
                         {t('mihomoBridge.enabledLabel')}
+                    </label>
+
+                    <label className="flex items-start gap-2.5 text-sm font-medium cursor-pointer select-none">
+                        <input
+                            type="checkbox"
+                            className="w-4 h-4 accent-primary mt-0.5"
+                            checked={form.auto_bind}
+                            onChange={e => setForm({ ...form, auto_bind: e.target.checked })}
+                        />
+                        <span>
+                            <span>{t('mihomoBridge.autoBindLabel')}</span>
+                            <span className="block text-xs font-normal text-muted-foreground mt-0.5">
+                                {t('mihomoBridge.autoBindHint')}
+                            </span>
+                        </span>
                     </label>
 
                     <div>
@@ -183,6 +201,16 @@ export default function MihomoStatusCard({ status, busy, onSaveSettings, onApply
                     <InfoRow label={t('mihomoBridge.workDir')} value={status?.work_dir} />
                     <InfoRow label={t('mihomoBridge.apiAddr')} value={status?.api_addr} />
                     <InfoRow label={t('mihomoBridge.listenersCount')} value={String(status?.listeners?.length ?? 0)} mono={false} />
+                    {status?.health && (
+                        <InfoRow
+                            label={t('mihomoBridge.healthLabel')}
+                            value={t('mihomoBridge.healthSummary', {
+                                ok: status.health.available ?? 0,
+                                dead: status.health.dead ?? 0,
+                            })}
+                            mono={false}
+                        />
+                    )}
                     {status?.running && startedAt && (
                         <InfoRow label={t('mihomoBridge.startedAt')} value={startedAt} mono={false} />
                     )}

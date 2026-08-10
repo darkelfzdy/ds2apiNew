@@ -54,8 +54,8 @@ ds2api 内置的 Mihomo 代理桥可以把机场订阅节点转换为本地独�
      超时/失败的节点不绑定账号），否则全部节点按当前顺序分配。分配时尽量保证
      每个节点只绑定一个账号，账号多于节点时从头循环。
    - 点击右侧 **测试延迟** 按钮，可批量测试全部节点延迟
-     （每批最多 60 个并发，经节点隧道请求 `http://www.gstatic.com/generate_204`
-     计时，与 Clash 等代理软件一致）；测完后节点按延迟升序排列，
+     （经节点隧道请求 `https://www.google.com/generate_204` 计真实连接延迟，
+     与 Clash 等代理软件一致）；测完后节点按延迟升序排列，
      失败/超时节点垫底，并在节点行显示延迟徽标。
 4. 绑定成功后，账号请求即经由 `127.0.0.1:<分配端口>` 从对应节点出口发出。
 
@@ -69,9 +69,11 @@ ds2api 内置的 Mihomo 代理桥可以把机场订阅节点转换为本地独�
 | `binary_path` | 空 | mihomo 二进制路径，留空自动探测 |
 | `base_port` | `10801` | 节点本地端口分配起始值（已有分配时禁止修改） |
 | `api_port` | `19090` | mihomo external-controller 监听端口（就绪探测用） |
+| `auto_bind` | `false` | 自动调度：后台定时"测速 + 自动分配"（见下） |
 
 订阅与端口映射**不再写入 config.json**，而是存放在与 config.json 同目录的
 `mihomo_subscriptions.json`（结构：`{ "version": 1, "subscriptions": [...], "port_map": {...} }`，
+节点最近的测速结果（延迟/健康状态/测试时间）直接挂在订阅节点上随文件持久化；
 可用环境变量 `DS2API_MIHOMO_SUBSCRIPTIONS_PATH` 覆盖路径）。旧版写在
 `config.mihomo.subscriptions` / `config.mihomo.port_map` 的配置仍可读取，
 下次增删订阅或保存配置时自动迁移到独立文件。
@@ -84,6 +86,30 @@ ds2api 内置的 Mihomo 代理桥可以把机场订阅节点转换为本地独�
   `runtime.yaml`、`mihomo.log` 与 mihomo 缓存
 - `DS2API_MIHOMO_SUBSCRIPTIONS_PATH`：订阅独立存储文件路径
   （默认与 config.json 同目录）
+- `DS2API_MIHOMO_INTERVAL`：自动巡检定时器节拍（默认 `15` 秒，最小 5 秒）。
+  服务启动 5 秒后立即触发第一轮"测速 + 自动分配"，之后按此节拍循环，
+  始终保持已绑定/异常节点的延迟数据最新
+- `DS2API_MIHOMO_FAILOVER_COOLDOWN_MINUTES`：坏节点安全转移后账号的换号冷却期
+  （默认 `15` 分钟）。冷却期内自动调度不再切换该账号的节点，避免故障节点间反复横跳；
+  手动绑定 / 一键分配会重置该冷却
+- `DS2API_MIHOMO_HEALTH_TIMEOUT`：单节点测速超时（默认 `5000` 毫秒）
+- `DS2API_MIHOMO_FAIL_THRESHOLD`：连续失败多少次判定为坏节点并触发故障转移
+  （默认 `2`）
+- `DS2API_MIHOMO_TEST_URL`：测速目标 URL（默认
+  `https://www.google.com/generate_204`，经节点隧道测真实连接延迟）
+
+### 自动调度（auto_bind）
+
+开启 `mihomo.auto_bind` 后，后台定时器循环执行"测速 + 自动分配"：
+
+1. 每轮对"已绑定 + 已标记异常"的节点经节点隧道测延迟并落盘（前端定时轮询，
+   面板上的延迟实时刷新）；
+2. 发现某个账号绑定的节点连续失败达到阈值时，**立即**把账号安全转移到
+   负载最低的健康节点，并让账号进入 15 分钟换号冷却期；
+3. 弹性号池新启用（补位）且未配置代理的账号自动分配健康节点；
+4. 被禁用/封号的账号自动解除绑定，端口归还可用池；
+5. mihomo 子进程意外退出时自动尝试重启（节流 60 秒）。
+
 
 ## 管理 API
 

@@ -17,6 +17,7 @@ import (
 // newFakeController 模拟 mihomo external-controller 的延迟测试接口
 // （GET /proxies/{name}/delay）。名为 "超时节点" 的节点返回 500（模拟失败）；
 // 其余节点返回 delays 中指定的延迟，未指定则返回默认正延迟。
+// proxy 名带 "subID::" 前缀（运行时限定名），按前缀后的节点名匹配 delays。
 func newFakeController(delays map[string]int64) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
@@ -25,6 +26,9 @@ func newFakeController(delays map[string]int64) *httptest.Server {
 			return
 		}
 		name, _ := url.PathUnescape(parts[1])
+		if idx := strings.Index(name, "::"); idx >= 0 {
+			name = name[idx+2:]
+		}
 		if name == "超时节点" {
 			w.WriteHeader(http.StatusInternalServerError)
 			_, _ = w.Write([]byte(`{"message":"request timeout"}`))

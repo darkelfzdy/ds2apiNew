@@ -18,7 +18,7 @@ type Bridge interface {
 	AddSubscription(ctx context.Context, name, rawURL string) (config.MihomoSubscription, error)
 	RefreshSubscription(ctx context.Context, subID string) (int, error)
 	DeleteSubscription(ctx context.Context, subID string) error
-	UpdateSettings(ctx context.Context, enabled bool, binaryPath string, basePort, apiPort int) error
+	UpdateSettings(ctx context.Context, enabled bool, binaryPath string, basePort, apiPort int, autoBind bool) error
 	ListNodes() []map[string]any
 	TestLatency(ctx context.Context) ([]map[string]any, error)
 	AssignAccounts(ctx context.Context, nodeKeys []string) (int, error)
@@ -49,4 +49,9 @@ func fieldInt(m map[string]any, key string) int {
 	default:
 		return 0
 	}
+}
+
+func fieldBool(m map[string]any, key string) bool {
+	v, _ := m[key].(bool)
+	return v
 }

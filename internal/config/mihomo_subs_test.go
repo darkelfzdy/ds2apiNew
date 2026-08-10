@@ -55,6 +55,33 @@ func TestMihomoConfigMarshalOmitsSubscriptions(t *testing.T) {
 	}
 }
 
+func TestMihomoAutoBindRoundTripsThroughSerialization(t *testing.T) {
+	cfg := Config{
+		Mihomo: MihomoConfig{
+			Enabled:  true,
+			AutoBind: true,
+		},
+	}
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+	if !strings.Contains(string(b), `"auto_bind":true`) {
+		t.Fatalf("expected auto_bind=true kept in serialization, got: %s", string(b))
+	}
+	var decoded Config
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+	if !decoded.Mihomo.AutoBind {
+		t.Fatal("auto_bind lost after roundtrip")
+	}
+	clone := decoded.Clone()
+	if !clone.Mihomo.AutoBind {
+		t.Fatal("clone dropped mihomo.auto_bind")
+	}
+}
+
 func TestMihomoSubscriptionsPersistToSeparateFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
@@ -99,6 +126,53 @@ func TestMihomoSubscriptionsPersistToSeparateFile(t *testing.T) {
 	}
 	if snap.Mihomo.PortMap["sub-1::节点"] != DefaultMihomoBasePort {
 		t.Fatalf("port_map lost after reload: %+v", snap.Mihomo.PortMap)
+	}
+}
+
+func TestMihomoLatencyPersistsOnNode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	t.Setenv("DS2API_CONFIG_JSON", "")
+	t.Setenv("DS2API_CONFIG_PATH", path)
+
+	store := LoadStore()
+	if err := store.Update(func(c *Config) error {
+		c.Mihomo.Subscriptions = []MihomoSubscription{
+			{ID: "sub-1", Name: "机场", URL: "https://example.com/sub", Nodes: []MihomoNode{
+				{Name: "香港 01", Type: "ss", Status: "ok", LatencyMS: 88, TestedAt: 123},
+			}},
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("update failed: %v", err)
+	}
+
+	// 延迟直接挂在节点上，随独立文件持久化；config.json 不应出现测速字段。
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if strings.Contains(string(content), "latency_ms") {
+		t.Fatalf("config.json should not contain latency, got: %s", content)
+	}
+	subsContent, err := os.ReadFile(filepath.Join(dir, "mihomo_subscriptions.json"))
+	if err != nil {
+		t.Fatalf("read subscriptions file: %v", err)
+	}
+	if !strings.Contains(string(subsContent), "latency_ms") {
+		t.Fatalf("subscriptions file should contain latency on node, got: %s", subsContent)
+	}
+
+	// 重新加载后节点延迟可用。
+	reloaded := LoadStore()
+	nodes := reloaded.Snapshot().Mihomo.Subscriptions[0].Nodes
+	if len(nodes) != 1 || nodes[0].Status != "ok" || nodes[0].LatencyMS != 88 || nodes[0].TestedAt != 123 {
+		t.Fatalf("latency lost after reload: %+v", nodes)
+	}
+	// 深拷贝应保留节点延迟。
+	clone := reloaded.Snapshot().Clone()
+	if clone.Mihomo.Subscriptions[0].Nodes[0].LatencyMS != 88 {
+		t.Fatal("clone dropped node latency")
 	}
 }
 

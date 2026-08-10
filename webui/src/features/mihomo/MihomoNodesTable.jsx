@@ -32,23 +32,35 @@ function PortBadge({ t, port }) {
     )
 }
 
-function LatencyBadge({ t, latency }) {
-    if (!latency) return null
-    if (latency.error) {
+function LatencyBadge({ t, latency, node }) {
+    if (latency) {
+        if (latency.error) {
+            return (
+                <span
+                    className="inline-flex items-center rounded-full border border-red-500/25 bg-red-500/10 px-2 py-1 text-[10px] font-medium text-red-500"
+                    title={latency.error}
+                >
+                    {t('mihomoBridge.latencyFailed')}
+                </span>
+            )
+        }
+        return (
+            <span className="inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-1 text-[10px] font-mono font-medium text-emerald-500">
+                {latency.delay_ms} ms
+            </span>
+        )
+    }
+    if (node?.health === 'fail') {
         return (
             <span
                 className="inline-flex items-center rounded-full border border-red-500/25 bg-red-500/10 px-2 py-1 text-[10px] font-medium text-red-500"
-                title={latency.error}
+                title={node.health_error || ''}
             >
                 {t('mihomoBridge.latencyFailed')}
             </span>
         )
     }
-    return (
-        <span className="inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-1 text-[10px] font-mono font-medium text-emerald-500">
-            {latency.delay_ms} ms
-        </span>
-    )
+    return null
 }
 
 function NodeRow({ t, node, latency, options, busy, onBind, onUnbind }) {
@@ -67,7 +79,7 @@ function NodeRow({ t, node, latency, options, busy, onBind, onUnbind }) {
                             {node.type || '?'}
                         </span>
                         <PortBadge t={t} port={node.local_port} />
-                        <LatencyBadge t={t} latency={latency} />
+                        <LatencyBadge t={t} latency={latency} node={node} />
                     </div>
                     <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                         {node.server && (
@@ -166,14 +178,6 @@ export default function MihomoNodesTable({ nodes, latency, accounts, busy, canTe
                 </div>
                 <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 shrink-0">
                     <button
-                        onClick={onAssignAll}
-                        disabled={assigning || testing || nodes.length === 0}
-                        className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors font-medium text-sm shadow-sm disabled:opacity-50"
-                    >
-                        {assigning ? <Loader2 className="w-4 h-4 animate-spin" /> : <UserCheck className="w-4 h-4" />}
-                        {assigning ? t('mihomoBridge.assigningAll') : t('mihomoBridge.assignAll')}
-                    </button>
-                    <button
                         onClick={onTestLatency}
                         disabled={testing || assigning || !canTest || nodes.length === 0}
                         className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg border border-border hover:bg-secondary transition-colors font-medium text-sm disabled:opacity-50"
@@ -181,6 +185,14 @@ export default function MihomoNodesTable({ nodes, latency, accounts, busy, canTe
                     >
                         {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Gauge className="w-4 h-4" />}
                         {testing ? t('mihomoBridge.testingLatency') : t('mihomoBridge.testLatency')}
+                    </button>
+                    <button
+                        onClick={onAssignAll}
+                        disabled={assigning || testing || nodes.length === 0}
+                        className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors font-medium text-sm shadow-sm disabled:opacity-50"
+                    >
+                        {assigning ? <Loader2 className="w-4 h-4 animate-spin" /> : <UserCheck className="w-4 h-4" />}
+                        {assigning ? t('mihomoBridge.assigningAll') : t('mihomoBridge.assignAll')}
                     </button>
                 </div>
             </div>

@@ -1,5 +1,20 @@
 import { useCallback, useEffect, useState } from 'react'
 
+// latencyFromNodes 从 /nodes 返回的节点健康字段重建延迟映射。
+// 测速结果已持久化在 mihomo_subscriptions.json，重启后进入页面即可展示，
+// 无需先手动点"测试延迟"。
+export function latencyFromNodes(nodes) {
+    const map = {}
+    for (const n of nodes || []) {
+        if (n.latency_ms > 0) {
+            map[n.node_key] = { delay_ms: n.latency_ms, error: '' }
+        } else if (n.health === 'fail') {
+            map[n.node_key] = { delay_ms: 0, error: n.health_error || 'fail' }
+        }
+    }
+    return map
+}
+
 // useMihomoBridge 封装 Mihomo 代理桥管理接口的全部数据访问。
 // config 变更（账号 proxy_id、托管代理列表）通过 onConfigChanged 通知上层刷新。
 export default function useMihomoBridge({ authFetch, onMessage, onConfigChanged, t }) {
@@ -57,7 +72,10 @@ export default function useMihomoBridge({ authFetch, onMessage, onConfigChanged,
         try {
             const res = await apiFetch('/admin/mihomo/nodes')
             const data = await readApiResponse(res)
-            setNodes(data.items || [])
+            const items = data.items || []
+            setNodes(items)
+            // 用持久化/最新健康数据重建延迟映射，进入页面即可看到历史测速结果。
+            setLatency(latencyFromNodes(items))
         } catch (_err) {
             setNodes([])
         }
@@ -72,6 +90,16 @@ export default function useMihomoBridge({ authFetch, onMessage, onConfigChanged,
     useEffect(() => {
         loadAll()
     }, [loadAll])
+
+    // 定时/实时刷新：后台自动巡检（默认 15s）会更新节点延迟并落盘，
+    // 前端定时轮询让面板上的延迟/健康状态保持最新。
+    useEffect(() => {
+        const interval = setInterval(() => {
+            loadStatus()
+            loadNodes()
+        }, 10000)
+        return () => clearInterval(interval)
+    }, [loadStatus, loadNodes])
 
     const withBusy = useCallback(async (key, fn) => {
         setBusy(prev => ({ ...prev, [key]: true }))
@@ -94,6 +122,7 @@ export default function useMihomoBridge({ authFetch, onMessage, onConfigChanged,
                 binary_path: form.binary_path || '',
                 base_port: Number(form.base_port) || 0,
                 api_port: Number(form.api_port) || 0,
+                auto_bind: Boolean(form.auto_bind),
             }),
         })
         const data = await readApiResponse(res)
@@ -194,8 +223,9 @@ export default function useMihomoBridge({ authFetch, onMessage, onConfigChanged,
         return true
     }), [apiFetch, withBusy, readApiResponse, report, t, loadNodes, loadStatus, onConfigChanged])
 
-    // testLatency 批量测试全部节点延迟（后端按每批最多 60 并发执行），
-    // 结果存进 latency（node_key -> {delay_ms, error}），供列表排序与展示。
+    // testLatency 批量测试全部节点延迟（后端按批次并发执行），
+    // 结果存进 latency（node_key -> {delay_ms, error}），供列表排序与展示；
+    // 同时刷新节点/状态，展示后端健康池的判定结果。
     const testLatency = useCallback(() => withBusy('delayTest', async () => {
         const res = await apiFetch('/admin/mihomo/delay-test', { method: 'POST' })
         const data = await readApiResponse(res)
@@ -205,8 +235,9 @@ export default function useMihomoBridge({ authFetch, onMessage, onConfigChanged,
             map[item.node_key] = { delay_ms: item.delay_ms, error: item.error }
         }
         setLatency(map)
+        await Promise.all([loadNodes(), loadStatus()])
         return true
-    }), [apiFetch, withBusy, readApiResponse, report, t])
+    }), [apiFetch, withBusy, readApiResponse, report, t, loadNodes, loadStatus])
 
     // assignAll 一键为全部账号分配节点绑定：已测过延迟时只用测试成功的节点
     // （按延迟升序，超时/失败的节点不绑定）；未测过则全部节点按原顺序。

@@ -131,6 +131,7 @@ func (m *Manager) BindAccount(_ context.Context, identifier, nodeKey string) err
 		}
 		if nodeKey == "" {
 			c.Accounts[idx].ProxyID = ""
+			c.Accounts[idx].NodeCooldownUntil = 0
 			gcLocked(c)
 			return validateMutation(c)
 		}
@@ -141,6 +142,7 @@ func (m *Manager) BindAccount(_ context.Context, identifier, nodeKey string) err
 		port := c.Mihomo.AllocateMihomoPort(nodeKey)
 		proxy := upsertManagedProxyLocked(c, nodeKey, node.Name, port)
 		c.Accounts[idx].ProxyID = proxy.ID
+		c.Accounts[idx].NodeCooldownUntil = 0 // 手动绑定视为用户显式选择，重置自动换号冷却
 		gcLocked(c)
 		return validateMutation(c)
 	})
@@ -148,17 +150,22 @@ func (m *Manager) BindAccount(_ context.Context, identifier, nodeKey string) err
 		return err
 	}
 	m.resetPool()
-	return m.Apply(context.Background())
+	m.applyBestEffort()
+	return nil
 }
 
 // AssignAccounts 一键为全部账号分配节点绑定：账号按配置顺序从上到下依次
 // 绑定到传入的节点列表（尽量保证每个节点只绑定一个账号，账号多于节点时
 // 循环从头再来）。已存在的 mihomo 托管绑定会先全部解除再按新分配重建，
 // 最终在单次事务 + 单次 Apply 内完成。返回实际绑定数。
+//
+// 健康池已标记为 fail 的节点会被服务端自动剔除（即使前端误传也不绑定）；
+// 健康池为空（未测过延迟）时按传入列表原样分配，保持向后兼容。
 func (m *Manager) AssignAccounts(_ context.Context, nodeKeys []string) (int, error) {
 	if m == nil || m.store == nil {
 		return 0, errors.New("mihomo manager 未初始化")
 	}
+	health := m.NodeHealthMap()
 	clean := make([]string, 0, len(nodeKeys))
 	seen := map[string]struct{}{}
 	for _, key := range nodeKeys {
@@ -170,6 +177,9 @@ func (m *Manager) AssignAccounts(_ context.Context, nodeKeys []string) (int, err
 			continue
 		}
 		seen[key] = struct{}{}
+		if h, known := health[key]; known && h.Status == NodeHealthFail {
+			continue // 测速失败的节点不参与分配
+		}
 		clean = append(clean, key)
 	}
 	nodeKeys = clean
@@ -191,10 +201,10 @@ func (m *Manager) AssignAccounts(_ context.Context, nodeKeys []string) (int, err
 			}
 		}
 		gcLocked(c)
-		// 按节点列表从上到下循环分配。
+		// 按节点列表从上到下循环分配（跳过禁用/弹性号池休眠账号，不占用端口）。
 		idx := 0
 		for i := range c.Accounts {
-			if c.Accounts[i].Identifier() == "" {
+			if c.Accounts[i].Disabled || c.Accounts[i].Identifier() == "" {
 				continue
 			}
 			nodeKey := nodeKeys[idx%len(nodeKeys)]
@@ -206,6 +216,7 @@ func (m *Manager) AssignAccounts(_ context.Context, nodeKeys []string) (int, err
 			port := c.Mihomo.AllocateMihomoPort(nodeKey)
 			proxy := upsertManagedProxyLocked(c, nodeKey, node.Name, port)
 			c.Accounts[i].ProxyID = proxy.ID
+			c.Accounts[i].NodeCooldownUntil = 0 // 一键分配视为用户显式重排，重置自动换号冷却
 			bound++
 		}
 		gcLocked(c)
@@ -215,7 +226,8 @@ func (m *Manager) AssignAccounts(_ context.Context, nodeKeys []string) (int, err
 		return 0, err
 	}
 	m.resetPool()
-	return bound, m.Apply(context.Background())
+	m.applyBestEffort()
+	return bound, nil
 }
 
 // AddSubscription 抓取并保存一个新订阅，返回订阅 ID。
@@ -249,7 +261,8 @@ func (m *Manager) AddSubscription(ctx context.Context, name, rawURL string) (con
 	}); err != nil {
 		return config.MihomoSubscription{}, err
 	}
-	return sub, m.Apply(context.Background())
+	m.applyBestEffort()
+	return sub, nil
 }
 
 // RefreshSubscription 重新抓取订阅节点；节点集合变化后执行 GC
@@ -289,7 +302,8 @@ func (m *Manager) RefreshSubscription(ctx context.Context, subID string) (int, e
 		return 0, err
 	}
 	m.resetPool()
-	return len(nodes), m.Apply(context.Background())
+	m.applyBestEffort()
+	return len(nodes), nil
 }
 
 // DeleteSubscription 删除订阅并解除其节点的全部绑定。
@@ -330,17 +344,19 @@ func (m *Manager) DeleteSubscription(_ context.Context, subID string) error {
 		return err
 	}
 	m.resetPool()
-	return m.Apply(context.Background())
+	m.applyBestEffort()
+	return nil
 }
 
-// UpdateSettings 更新桥开关/二进制路径/端口设置并立即应用。
-func (m *Manager) UpdateSettings(_ context.Context, enabled bool, binaryPath string, basePort, apiPort int) error {
+// UpdateSettings 更新桥开关/二进制路径/端口设置/自动调度开关并立即应用。
+func (m *Manager) UpdateSettings(_ context.Context, enabled bool, binaryPath string, basePort, apiPort int, autoBind bool) error {
 	if m == nil || m.store == nil {
 		return errors.New("mihomo manager 未初始化")
 	}
 	err := m.store.Update(func(c *config.Config) error {
 		c.Mihomo.Enabled = enabled
 		c.Mihomo.BinaryPath = strings.TrimSpace(binaryPath)
+		c.Mihomo.AutoBind = autoBind
 		if basePort > 0 {
 			if basePort != c.Mihomo.BasePort && len(c.Mihomo.PortMap) > 0 {
 				return fmt.Errorf("已存在端口分配（%d 个），更换 base_port 前请先解除所有账号绑定", len(c.Mihomo.PortMap))
@@ -356,7 +372,8 @@ func (m *Manager) UpdateSettings(_ context.Context, enabled bool, binaryPath str
 	if err != nil {
 		return err
 	}
-	return m.Apply(context.Background())
+	m.applyBestEffort()
+	return nil
 }
 
 // ListNodes 汇总全部订阅节点及其绑定/端口状态，供管理界面展示。
@@ -392,6 +409,10 @@ func (m *Manager) ListNodes() []map[string]any {
 			if v, ok := node.Raw["server"].(string); ok {
 				server = v
 			}
+			status := node.Status
+			if status == "" {
+				status = NodeHealthUnknown
+			}
 			out = append(out, map[string]any{
 				"node_key":        nodeKey,
 				"name":            node.Name,
@@ -402,6 +423,10 @@ func (m *Manager) ListNodes() []map[string]any {
 				"local_port":      port,
 				"proxy_id":        proxyID,
 				"accounts":        accountsByProxy[proxyID],
+				"health":          status,
+				"latency_ms":      node.LatencyMS,
+				"health_error":    node.Error,
+				"tested_at":       node.TestedAt,
 			})
 		}
 	}
@@ -411,5 +436,14 @@ func (m *Manager) ListNodes() []map[string]any {
 func (m *Manager) resetPool() {
 	if m.pool != nil {
 		m.pool.Reset()
+	}
+}
+
+// applyBestEffort 在配置已持久化成功后尝试重新应用 mihomo 运行时配置。
+// 失败只记录（Apply 内部会写 last_error，状态卡片可见），不回滚已保存的绑定——
+// 否则用户看到"操作失败"但绑定其实已生效，会重复操作。
+func (m *Manager) applyBestEffort() {
+	if err := m.Apply(context.Background()); err != nil {
+		config.Logger.Warn("[mihomo] apply after config change failed (state persisted, see status.last_error)", "error", err)
 	}
 }

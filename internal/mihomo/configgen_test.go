@@ -66,13 +66,83 @@ func TestBuildRuntimeYAMLWithBinding(t *testing.T) {
 	if !ok || len(proxies) != 2 {
 		t.Fatalf("expected 2 proxies, got %v", doc["proxies"])
 	}
+	// proxy 名应使用 "subID::nodeName" 限定名，避免跨订阅同名节点冲突。
+	proxy0 := proxies[0].(map[string]any)
+	if proxy0["name"] != config.MihomoNodeKey("sub-1", "香港 01") {
+		t.Fatalf("proxy name must be scoped, got %v", proxy0["name"])
+	}
 	listeners, ok := doc["listeners"].([]any)
 	if !ok || len(listeners) != 1 {
 		t.Fatalf("expected 1 listener, got %v", doc["listeners"])
 	}
 	listener := listeners[0].(map[string]any)
-	if listener["port"] != 10801 || listener["proxy"] != "香港 01" || listener["type"] != "socks" || listener["listen"] != "127.0.0.1" {
+	if listener["port"] != 10801 || listener["proxy"] != config.MihomoNodeKey("sub-1", "香港 01") || listener["type"] != "socks" || listener["listen"] != "127.0.0.1" {
 		t.Fatalf("listener mismatch: %v", listener)
+	}
+}
+
+func TestBuildRuntimeYAMLSameNodeNameAcrossSubs(t *testing.T) {
+	nodeKey1 := config.MihomoNodeKey("sub-1", "香港 01")
+	nodeKey2 := config.MihomoNodeKey("sub-2", "香港 01")
+	cfg := config.Config{
+		Accounts: []config.Account{
+			{Email: "a@test.com", ProxyID: config.MihomoManagedProxyID(nodeKey1)},
+			{Email: "b@test.com", ProxyID: config.MihomoManagedProxyID(nodeKey2)},
+		},
+		Proxies: []config.Proxy{
+			{ID: config.MihomoManagedProxyID(nodeKey1), Name: "香港 01", Type: "socks5", Host: "127.0.0.1", Port: 10801},
+			{ID: config.MihomoManagedProxyID(nodeKey2), Name: "香港 01", Type: "socks5", Host: "127.0.0.1", Port: 10802},
+		},
+		Mihomo: config.MihomoConfig{
+			Enabled:  true,
+			BasePort: config.DefaultMihomoBasePort,
+			APIPort:  config.DefaultMihomoAPIPort,
+			Subscriptions: []config.MihomoSubscription{
+				{ID: "sub-1", URL: "https://a.example.com", Nodes: []config.MihomoNode{
+					{Name: "香港 01", Type: "ss", Raw: map[string]any{"name": "香港 01", "type": "ss", "server": "a.example.com", "port": 8388}},
+				}},
+				{ID: "sub-2", URL: "https://b.example.com", Nodes: []config.MihomoNode{
+					{Name: "香港 01", Type: "ss", Raw: map[string]any{"name": "香港 01", "type": "ss", "server": "b.example.com", "port": 8388}},
+				}},
+			},
+			PortMap: map[string]int{nodeKey1: 10801, nodeKey2: 10802},
+		},
+	}
+	out, bindings, err := BuildRuntimeYAML(cfg)
+	if err != nil {
+		t.Fatalf("build failed: %v", err)
+	}
+	if len(bindings) != 2 {
+		t.Fatalf("expected 2 bindings, got %+v", bindings)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(out, &doc); err != nil {
+		t.Fatalf("generated yaml invalid: %v", err)
+	}
+	proxies := doc["proxies"].([]any)
+	if len(proxies) != 2 {
+		t.Fatalf("expected 2 proxies (no name dedup across subs), got %v", doc["proxies"])
+	}
+	proxyName := func(p any) string {
+		m, _ := p.(map[string]any)
+		s, _ := m["name"].(string)
+		return s
+	}
+	if proxyName(proxies[0]) != nodeKey1 || proxyName(proxies[1]) != nodeKey2 {
+		t.Fatalf("proxy names must be scoped per subscription: %s, %s", proxyName(proxies[0]), proxyName(proxies[1]))
+	}
+	// 两个 listener 各直出各自的限定 proxy。
+	listeners := doc["listeners"].([]any)
+	if len(listeners) != 2 {
+		t.Fatalf("expected 2 listeners, got %v", doc["listeners"])
+	}
+	seen := map[any]bool{}
+	for _, l := range listeners {
+		lm, _ := l.(map[string]any)
+		seen[lm["proxy"]] = true
+	}
+	if !seen[nodeKey1] || !seen[nodeKey2] {
+		t.Fatalf("listeners must reference distinct scoped proxies, got %v", seen)
 	}
 }
 

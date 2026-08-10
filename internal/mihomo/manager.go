@@ -45,10 +45,19 @@ type Manager struct {
 
 	dlMu sync.Mutex
 	dl   downloadState // 内核下载任务状态（独立锁，避免阻塞主状态锁）
+
+	// 自动调度运行时状态（测速/故障转移/补位）。
+	// 节点健康数据直接挂在 config.Mihomo.Subscriptions[].Nodes 上随订阅持久化，
+	// 这里只维护连续失败次数（FailStreak，纯运行时，不落盘）与自愈节流。
+	healthMu    sync.Mutex
+	failStreak  map[string]int
+	lastRestart time.Time // 子进程崩溃自愈的重试节流（避免每 tick 都重启）
+	watchOnce   sync.Once
+	watchStop   chan struct{}
 }
 
 func NewManager(store *config.Store, pool PoolResetter) *Manager {
-	return &Manager{store: store, pool: pool}
+	return &Manager{store: store, pool: pool, failStreak: map[string]int{}}
 }
 
 // Supported 报告当前部署形态能否拉起子进程（Vercel Serverless 不支持）。
@@ -61,11 +70,13 @@ func WorkDir() string {
 	return config.ResolvePath("DS2API_MIHOMO_DIR", "data/mihomo")
 }
 
-// StartIfEnabled 在服务启动时调用：配置启用则后台拉起 mihomo。
+// StartIfEnabled 在服务启动时调用：配置启用则后台拉起 mihomo，
+// 并启动健康巡检 watcher（未启用时 watcher 逐轮空转，配置开启后自动生效）。
 func (m *Manager) StartIfEnabled() {
 	if !m.Supported() || m == nil || m.store == nil {
 		return
 	}
+	m.startWatcher()
 	if !m.store.Snapshot().Mihomo.Enabled {
 		return
 	}
@@ -160,11 +171,12 @@ func (m *Manager) Apply(_ context.Context) error {
 	return nil
 }
 
-// Stop 终止 mihomo 子进程（服务退出时调用）。
+// Stop 终止 mihomo 子进程与健康巡检（服务退出时调用）。
 func (m *Manager) Stop() {
 	if m == nil {
 		return
 	}
+	m.stopWatcher()
 	m.stopProcess()
 }
 
@@ -189,6 +201,10 @@ func (m *Manager) Status() map[string]any {
 				running = false // 进程看似活着但端口未监听，降级为异常态
 				break
 			}
+		}
+		// 无绑定（ports 为空）时靠 api 端口判断进程是否真的存活。
+		if running && !m.apiReachable() {
+			running = false
 		}
 	}
 	// 绑定视图：节点键 -> 账号列表
@@ -217,9 +233,17 @@ func (m *Manager) Status() map[string]any {
 		})
 	}
 
+	nodeKeys := make([]string, 0)
+	for _, sub := range cfg.Mihomo.Subscriptions {
+		for _, node := range sub.Nodes {
+			nodeKeys = append(nodeKeys, config.MihomoNodeKey(sub.ID, node.Name))
+		}
+	}
+
 	return map[string]any{
 		"supported":     m.Supported(),
 		"enabled":       cfg.Mihomo.Enabled,
+		"auto_bind":     cfg.Mihomo.AutoBind,
 		"running":       running,
 		"pid":           pid,
 		"binary":        binary,
@@ -234,6 +258,7 @@ func (m *Manager) Status() map[string]any {
 		"last_error":    lastErr,
 		"listeners":     listeners,
 		"subscriptions": len(cfg.Mihomo.Subscriptions),
+		"health":        m.healthSummary(nodeKeys),
 	}
 }
 
@@ -345,7 +370,9 @@ func (m *Manager) stopProcess() {
 
 // resolveBinary 按优先级定位 mihomo 可执行文件：
 // 配置 binary_path > MIHOMO_PATH 环境变量 > ds2api 同目录 > 工作目录
-// （含 bin/ 子目录）> PATH。
+// （含 bin/、data/ 子目录）> 容器常见路径（/app/mihomo、/app/data/mihomo）> PATH。
+// 非 Windows 平台命中后自动补齐可执行位（等价 chmod +x），
+// 避免解压/挂载的二进制丢失执行权限导致拉起失败。
 func resolveBinary(configured string) (string, error) {
 	exeName := "mihomo"
 	if runtime.GOOS == "windows" {
@@ -364,20 +391,45 @@ func resolveBinary(configured string) (string, error) {
 	candidates = append(candidates,
 		filepath.Join(config.BaseDir(), exeName),
 		filepath.Join(config.BaseDir(), "bin", exeName),
+		filepath.Join(config.BaseDir(), "data", exeName),
+		filepath.Join("/app", exeName),
+		filepath.Join("/app", "data", exeName),
 	)
 	for _, candidate := range candidates {
 		if st, err := os.Stat(candidate); err == nil && !st.IsDir() {
 			abs, err := filepath.Abs(candidate)
 			if err != nil {
-				return candidate, nil
+				abs = candidate
 			}
+			ensureExecutable(abs)
 			return abs, nil
 		}
 	}
 	if path, err := exec.LookPath("mihomo"); err == nil {
+		ensureExecutable(path)
 		return path, nil
 	}
 	return "", fmt.Errorf("未找到 mihomo 可执行文件：请将 %s 放到 ds2api 同级目录、工作目录或 bin/ 下，或设置 MIHOMO_PATH / mihomo.binary_path", exeName)
+}
+
+// ensureExecutable 在非 Windows 平台为二进制补齐可执行位（chmod +x）。
+// 权限修改失败不阻断启动，仅记录告警（如只读文件系统）。
+func ensureExecutable(path string) {
+	if runtime.GOOS == "windows" {
+		return
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		return
+	}
+	if st.Mode()&0o111 == 0o111 {
+		return
+	}
+	if err := os.Chmod(path, st.Mode()|0o755); err != nil {
+		config.Logger.Warn("[mihomo] chmod +x failed", "path", path, "error", err)
+		return
+	}
+	config.Logger.Info("[mihomo] applied executable permission", "path", path)
 }
 
 // preflightPorts 启动前检查节点监听端口与 API 端口未被占用，

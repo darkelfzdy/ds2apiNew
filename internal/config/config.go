@@ -51,6 +51,9 @@ type Account struct {
 	// 在收到验证码挑战后主动设置的——挑战意味着风控已经盯上这个账号，
 	// 继续用它只会把情况变得更糟。
 	CooldownUntil float64 `json:"cooldown_until,omitempty"`
+	// NodeCooldownUntil 是坏节点自动安全转移后账号的换号冷却到期时间（Unix 秒）。
+	// 冷却期内自动调度不会再次切换该账号的节点，避免故障节点间反复横跳。
+	NodeCooldownUntil float64 `json:"node_cooldown_until,omitempty"`
 }
 
 type APIKey struct {

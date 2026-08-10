@@ -239,6 +239,7 @@ func cloneMihomoConfig(in MihomoConfig) MihomoConfig {
 		BinaryPath: in.BinaryPath,
 		BasePort:   in.BasePort,
 		APIPort:    in.APIPort,
+		AutoBind:   in.AutoBind,
 	}
 	if len(in.Subscriptions) > 0 {
 		out.Subscriptions = make([]MihomoSubscription, len(in.Subscriptions))

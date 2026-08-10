@@ -43,7 +43,9 @@ func (s *responsesStreamRuntime) sendDone() {
 
 func (s *responsesStreamRuntime) processToolStreamEvents(events []toolstream.Event, emitContent bool, resetAfterToolCalls bool) {
 	for _, evt := range events {
-		if emitContent && evt.Content != "" {
+		if emitContent && evt.Content != "" && !s.toolCallsEmitted {
+			// 已发出 tool_calls 后，工具调用块之后的尾巴正文不再透传，
+			// 避免工具调用最后几行结果泄漏到正文。
 			cleaned := cleanVisibleOutput(evt.Content, s.stripReferenceMarkers)
 			if cleaned != "" && (!s.searchEnabled || !sse.IsCitation(cleaned)) {
 				s.emitTextDelta(cleaned)

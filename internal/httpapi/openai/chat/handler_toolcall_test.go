@@ -85,6 +85,21 @@ func streamFinishReason(frames []map[string]any) string {
 	return ""
 }
 
+func collectStreamContent(frames []map[string]any) string {
+	var b strings.Builder
+	for _, frame := range frames {
+		choices, _ := frame["choices"].([]any)
+		for _, item := range choices {
+			choice, _ := item.(map[string]any)
+			delta, _ := choice["delta"].(map[string]any)
+			if c, ok := delta["content"].(string); ok {
+				b.WriteString(c)
+			}
+		}
+	}
+	return b.String()
+}
+
 func TestHandleNonStreamSingleAttemptReturns503WhenUpstreamOutputEmpty(t *testing.T) {
 	h := &Handler{}
 	resp := makeSSEHTTPResponse(
@@ -496,6 +511,62 @@ func TestHandleStreamEmitsDistinctToolCallIDsAcrossSeparateToolBlocks(t *testing
 	}
 	if ids[0] == ids[1] {
 		t.Fatalf("expected distinct tool call ids across blocks, got %#v body=%s", ids, rec.Body.String())
+	}
+}
+
+func TestHandleStreamNoToolsInterceptsEPSEToolCalls(t *testing.T) {
+	h := &Handler{}
+	resp := makeSSEHTTPResponse(
+		`data: {"p":"response/content","v":"<|EPSE|tool_calls><|EPSE|invoke name=\"search\"><|EPSE|parameter name=\"q\">golang</|EPSE|parameter></|EPSE|invoke></|EPSE|tool_calls>"}`,
+		`data: [DONE]`,
+	)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+
+	h.handleStream(rec, req, resp, "cid-no-tools-epse", "deepseek-v4-flash", "prompt", 0, false, false, nil, nil, nil)
+
+	frames, done := parseSSEDataFrames(t, rec.Body.String())
+	if !done {
+		t.Fatalf("expected [DONE], body=%s", rec.Body.String())
+	}
+	if !streamHasToolCallsDelta(frames) {
+		t.Fatalf("expected tool_calls delta for EPSE block without client tools, body=%s", rec.Body.String())
+	}
+	if content := collectStreamContent(frames); strings.Contains(content, "EPSE") || strings.Contains(content, "<|") {
+		t.Fatalf("expected no raw EPSE markup leaked into content, got %q", content)
+	}
+	if streamFinishReason(frames) != "tool_calls" {
+		t.Fatalf("expected finish_reason=tool_calls, body=%s", rec.Body.String())
+	}
+}
+
+func TestHandleStreamDropsTextAfterToolCallBlock(t *testing.T) {
+	h := &Handler{}
+	resp := makeSSEHTTPResponse(
+		`data: {"p":"response/content","v":"前置文本\n<tool_calls>\n  <invoke name=\"read_file\">\n    <parameter name=\"path\">README.MD</parameter>\n  </invoke>\n</tool_calls>\n尾巴文本"}`,
+		`data: [DONE]`,
+	)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+
+	h.handleStream(rec, req, resp, "cid-tail-drop", "deepseek-v4-flash", "prompt", 0, false, false, []string{"read_file"}, nil, nil)
+
+	frames, done := parseSSEDataFrames(t, rec.Body.String())
+	if !done {
+		t.Fatalf("expected [DONE], body=%s", rec.Body.String())
+	}
+	if !streamHasToolCallsDelta(frames) {
+		t.Fatalf("expected tool_calls delta, body=%s", rec.Body.String())
+	}
+	content := collectStreamContent(frames)
+	if !strings.Contains(content, "前置文本") {
+		t.Fatalf("expected text before tool block to be streamed, got %q", content)
+	}
+	if strings.Contains(content, "尾巴文本") {
+		t.Fatalf("expected text after tool block to be dropped, got %q", content)
+	}
+	if streamFinishReason(frames) != "tool_calls" {
+		t.Fatalf("expected finish_reason=tool_calls, body=%s", rec.Body.String())
 	}
 }
 

@@ -39,7 +39,6 @@ function processToolSieveChunk(state, chunk, toolNames) {
       if (!consumed.ready) {
         break;
       }
-      const captured = state.capture;
       state.capture = '';
       state.capturing = false;
       resetIncrementalToolState(state);
@@ -49,8 +48,13 @@ function processToolSieveChunk(state, chunk, toolNames) {
           noteText(state, consumed.prefix);
           events.push({ type: 'text', text: consumed.prefix });
         }
-        state.pendingToolRaw = captured;
-        state.pendingToolCalls = consumed.calls;
+        // Emit the completed tool call immediately so the runtime can mark the
+        // turn as tool-call emitting before the capture suffix (tail prose after
+        // the tool block) is released as content. Deferring to the next
+        // processToolSieveChunk call would let same-chunk tail text slip through
+        // as visible content in the same stream pass.
+        events.push({ type: 'tool_calls', calls: consumed.calls });
+        state.pendingToolRaw = '';
         if (consumed.suffix) {
           state.pending = consumed.suffix + state.pending;
         }

@@ -279,6 +279,10 @@ async function handleVercelStream(req, res, rawBody, payload) {
             continue;
           }
           if (evt.text) {
+            // 已发出 tool_calls 后，收尾阶段剩余的工具块后正文同样丢弃，与流式处理一致。
+            if (toolCallsEmitted) {
+              continue;
+            }
             deltaCoalescer.append('content', evt.text);
           }
         }
@@ -430,6 +434,11 @@ async function handleVercelStream(req, res, rawBody, payload) {
                       continue;
                     }
                     if (evt.text) {
+                      // 已发出 tool_calls 后，工具调用块之后追加的尾巴正文不再透传
+                      // （OpenAI 规范中 tool_calls 回合的 content 应为空）。
+                      if (toolCallsEmitted) {
+                        continue;
+                      }
                       deltaCoalescer.append('content', evt.text);
                     }
                   }

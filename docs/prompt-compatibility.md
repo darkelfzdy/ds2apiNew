@@ -175,14 +175,19 @@ Go 侧读取 DeepSeek SSE 时不再依赖 `bufio.Scanner` 的固定 2MiB 单行�
 工具提示词也会明确要求模型按本次调用实际需要填写参数，禁止输出 placeholder、空字符串或纯空白参数；如果必填参数未知，应先追问用户或正常文字回复，而不是输出空工具壳。对 `Bash` / `execute_command` 这类 shell 工具，命令或脚本必须写入 `command` 参数。解析层仍会把空字符串参数结构化返回；是否拒绝空 `command` 由后续工具执行侧 / 客户端 schema 校验决定。
 如果当前请求声明了 `Read` / `read_file` 这类读取工具，兼容层会额外注入一条 read-tool cache guard：当读取结果只表示“文件未变更 / 已在历史中 / 请引用先前上下文 / 没有正文内容”时，模型必须把它视为内容不可用，不能反复调用同一个无正文读取；应改为请求完整正文读取能力，或向用户说明需要重新提供文件内容。这个约束只缓解客户端缓存返回空内容导致的死循环，DS2API 不会也无法凭空恢复客户端本地文件正文。
 
+OpenAI Chat / Responses 流式链路中的 toolSieve 拦截恒为开启（`bufferToolContent` 不再依赖客户端是否携带 `tools`；Vercel Node 流式路径的 `toolSieveEnabled` 与之一致）：模型被要求在回复末尾以 `<|EPSE|tool_calls>...` 格式输出工具调用，当客户端发起不带 `tools` 的「继续会话」请求时，若拦截关闭会导致 EPSE 原文作为正文透传给客户端形成乱码；toolSieve 的解析不依赖工具名过滤，空工具列表同样能正常拦截。已发出 `tool_calls` 之后，工具调用块之后追加的尾巴正文不再透传给客户端（OpenAI 规范中 tool_calls 回合的 content 应为空/缺省），Go 与 Vercel Node 两条流式路径行为一致；该丢弃只作用于流式输出层，完整模型原文仍保留在内部历史归档与 usage 统计中，供后续「继续会话」上下文使用。
+
+统一工具调用格式说明（`internal/toolcall/tool_prompt.go` 的 `BuildToolCallInstructions`）还包含一段「调用决策」指引：历史对话中的 `<|EPSE|tool_calls>` 块是已执行完毕的工具调用记录而非待办事项；是否需要继续调用取决于当前任务还需什么，同一工具允许用不同参数多次调用、失败或结果不完整时也可重试，但不要因历史中出现过某工具而回避再次调用，也不要重复执行已完成且结果正确的调用。该段与原有格式规则并存，未改变标签语法、参数格式或示例强度。
+
 ### 6.1 按 API Key 控制工具注入
 
 每个托管 API Key 可以单独配置 `tools_enabled` 开关（默认关闭）。当某把 Key 的 `tools_enabled=false` 时，使用该 Key 发起的请求无论是否携带 `tools` 定义，兼容层都会在标准化之前清空 `tools` / `tool_choice` 字段，使得：
 
 - 工具描述（`You have access to these tools:` 大段文本）不会被注入 system prompt
-- EPSE 工具调用格式说明、正面/反面示例不会被注入
+- EPSE 工具调用格式说明、正面/反面示例不会注入（包括「调用决策」指引段落）
 - `TOOLS.txt` 工具描述文件不会上传
-- 流式工具调用检测和缓冲不激活
+
+说明：OpenAI Chat / Responses 流式链路的 toolSieve 拦截本身恒为开启（安全兜底，不随 `tools_enabled` 切换），但 `tools_enabled=false` 下 EPSE 工具指令与 `TOOLS.txt` 均不注入，模型不会被引导输出可拦截的工具块，因此实际不会产生工具调用。
 
 仅保留最基础的文字对话能力。该开关适用于降低封号风险的场景。
 

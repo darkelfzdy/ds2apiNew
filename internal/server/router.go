@@ -78,6 +78,7 @@ func NewApp() (*App, error) {
 	mihomoMgr := mihomo.NewManager(store, pool)
 	mihomoMgr.SetProxyReset(dsClient.ResetProxyClients)
 	dsClient.SetNodeFailureReporter(mihomoMgr.ReportUpstreamResult)
+	dsClient.SetAccountPoolChanged(mihomoMgr.RequestReconcile)
 	adminHandler := &admin.Handler{Store: store, Pool: pool, DS: dsClient, OpenAI: chatHandler, ChatHistory: chatHistoryStore, Mihomo: mihomoMgr, ResetProxyClients: dsClient.ResetProxyClients, WebUIFallback: webuiHandler.HandleAdminFallback}
 
 	r := chi.NewRouter()

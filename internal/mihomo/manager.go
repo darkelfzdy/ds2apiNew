@@ -170,6 +170,20 @@ func (m *Manager) StartIfEnabled() {
 	}()
 }
 
+// RequestReconcile 请求立即执行一次轻量绑定调和：仅基于已有测速结果分配节点，
+// 不测速、不走完整巡检。供"账号启用/禁用、弹性号池补位"等事件触发。
+// 非阻塞入队（缓冲 1 去抖），由 watcherLoop 串行消费，避免在请求路径直接 Apply；
+// 未开启 auto_bind 时 reconcileBindings 内部自动忽略。
+func (m *Manager) RequestReconcile() {
+	if m == nil || m.reconcileCh == nil {
+		return
+	}
+	select {
+	case m.reconcileCh <- struct{}{}:
+	default:
+	}
+}
+
 // Apply 依据当前配置重建 runtime.yaml 并（重）启动 mihomo 进程。
 // 配置未启用时确保进程停止。幂等，可被绑定/订阅/设置变更反复触发。
 // 并发调用会被串行化：后到的调用等待前一次应用完成后再用最新配置执行，

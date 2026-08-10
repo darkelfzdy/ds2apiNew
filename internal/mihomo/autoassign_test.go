@@ -299,6 +299,25 @@ func TestAssignAccountsSkipsManuallyUnboundAccount(t *testing.T) {
 	}
 }
 
+func TestRequestReconcileEnqueuesNonBlocking(t *testing.T) {
+	mgr := NewManager(newAutoBindTestStore(t), nil)
+	mgr.RequestReconcile()
+	mgr.RequestReconcile() // 二次请求应被缓冲（容量 1）去抖，不阻塞
+	select {
+	case <-mgr.reconcileCh:
+	default:
+		t.Fatal("expected one reconcile signal after RequestReconcile")
+	}
+	select {
+	case <-mgr.reconcileCh:
+		t.Fatal("reconcile channel must be deduped to a single pending signal")
+	default:
+	}
+	// nil manager / 未初始化通道应安全跳过。
+	var nilMgr *Manager
+	nilMgr.RequestReconcile()
+}
+
 func TestListNodesExposesHealth(t *testing.T) {
 	store := newAutoBindTestStore(t)
 	mgr := NewManager(store, nil)

@@ -36,6 +36,11 @@ type Client struct {
 	// 供 mihomo 代理桥把真实流量结果闭环反馈到节点健康。
 	nodeReporterMu sync.RWMutex
 	nodeReporter   func(proxyID string, success bool)
+
+	// accountPoolChanged 在账号启用/禁用状态变化（含弹性号池补位）后触发，
+	// 供 mihomo 代理桥立即按已有测速结果为新启用账号分配节点。
+	poolChangedMu sync.RWMutex
+	poolChanged   func()
 }
 
 func NewClient(store *config.Store, resolver *auth.Resolver) *Client {
@@ -63,4 +68,27 @@ func NewClient(store *config.Store, resolver *auth.Resolver) *Client {
 // PreloadPow 保留兼容接口，纯 Go 实现无需预加载。
 func (c *Client) PreloadPow(_ context.Context) error {
 	return nil
+}
+
+// SetAccountPoolChanged 挂接账号池启用/禁用变化回调（mihomo 桥侧实现，
+// 用于新启用账号立即获得节点绑定）。
+func (c *Client) SetAccountPoolChanged(fn func()) {
+	if c == nil {
+		return
+	}
+	c.poolChangedMu.Lock()
+	c.poolChanged = fn
+	c.poolChangedMu.Unlock()
+}
+
+func (c *Client) notifyAccountPoolChanged() {
+	if c == nil {
+		return
+	}
+	c.poolChangedMu.RLock()
+	fn := c.poolChanged
+	c.poolChangedMu.RUnlock()
+	if fn != nil {
+		fn()
+	}
 }

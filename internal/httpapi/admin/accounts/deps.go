@@ -14,9 +14,18 @@ type Handler struct {
 	DS          adminshared.DeepSeekCaller
 	OpenAI      adminshared.OpenAIChatCaller
 	ChatHistory *chathistory.Store
+	// OnAccountsChanged 在账号启用/禁用、弹性号池重算等操作后触发（若非 nil），
+	// 供 mihomo 代理桥立即按已有测速结果为新启用账号分配节点。
+	OnAccountsChanged func()
 }
 
 var writeJSON = adminshared.WriteJSON
+
+func (h *Handler) notifyAccountsChanged() {
+	if h != nil && h.OnAccountsChanged != nil {
+		h.OnAccountsChanged()
+	}
+}
 
 func reverseAccounts(a []config.Account) { adminshared.ReverseAccounts(a) }
 func intFromQuery(r *http.Request, key string, d int) int {

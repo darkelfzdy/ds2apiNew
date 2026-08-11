@@ -26,7 +26,6 @@ func ProcessChunk(state *State, chunk string, toolNames []string) []Event {
 			if !ready {
 				break
 			}
-			captured := state.capture.String()
 			state.capture.Reset()
 			state.capturing = false
 			state.resetIncrementalToolState()
@@ -35,11 +34,16 @@ func ProcessChunk(state *State, chunk string, toolNames []string) []Event {
 					state.noteText(prefix)
 					events = append(events, Event{Content: prefix})
 				}
+				// Emit the completed tool call immediately so the runtime can mark
+				// the turn as tool-call emitting before the capture suffix (tail
+				// prose after the tool block) is released as content. Deferring
+				// to the next ProcessChunk call would let same-chunk tail text
+				// slip through as visible content in the same onParsed pass.
+				events = append(events, Event{ToolCalls: calls})
+				state.pendingToolRaw = ""
 				if suffix != "" {
 					state.pending.WriteString(suffix)
 				}
-				_ = captured
-				state.pendingToolCalls = calls
 				continue
 			}
 			if prefix != "" {

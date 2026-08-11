@@ -18,6 +18,7 @@ import (
 	"ds2api/internal/config"
 	claudefmt "ds2api/internal/format/claude"
 	"ds2api/internal/httpapi/openai/history"
+	"ds2api/internal/httpapi/openai/shared"
 	"ds2api/internal/httpapi/requestbody"
 	"ds2api/internal/promptcompat"
 	"ds2api/internal/responsehistory"
@@ -57,9 +58,12 @@ func isClaudeVercelProxyRequest(r *http.Request) bool {
 }
 
 func (h *Handler) handleClaudeDirect(w http.ResponseWriter, r *http.Request) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, shared.GeneralMaxSize)
 	raw, err := io.ReadAll(r.Body)
 	if err != nil {
-		if errors.Is(err, requestbody.ErrInvalidUTF8Body) {
+		if requestbody.IsTooLarge(err) {
+			writeClaudeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+		} else if errors.Is(err, requestbody.ErrInvalidUTF8Body) {
 			writeClaudeError(w, http.StatusBadRequest, "invalid json")
 		} else {
 			writeClaudeError(w, http.StatusBadRequest, "invalid body")
@@ -163,9 +167,12 @@ func (h *Handler) handleClaudeDirectStream(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *Handler) proxyViaOpenAI(w http.ResponseWriter, r *http.Request, store ConfigReader) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, shared.GeneralMaxSize)
 	raw, err := io.ReadAll(r.Body)
 	if err != nil {
-		if errors.Is(err, requestbody.ErrInvalidUTF8Body) {
+		if requestbody.IsTooLarge(err) {
+			writeClaudeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+		} else if errors.Is(err, requestbody.ErrInvalidUTF8Body) {
 			writeClaudeError(w, http.StatusBadRequest, "invalid json")
 		} else {
 			writeClaudeError(w, http.StatusBadRequest, "invalid body")

@@ -54,6 +54,12 @@ func (d wireDoer) Do(req *http.Request) (*http.Response, error) {
 	return resp, nil
 }
 
+func (d wireDoer) CloseIdleConnections() {
+	if closer, ok := d.inner.(interface{ CloseIdleConnections() }); ok {
+		closer.CloseIdleConnections()
+	}
+}
+
 func accountIDFromRequest(req *http.Request) string {
 	if req == nil {
 		return ""

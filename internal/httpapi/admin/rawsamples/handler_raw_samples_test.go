@@ -66,6 +66,7 @@ func recordCapturedResponse(label, rawURL string, statusCode int, request any, b
 }
 
 func TestCaptureRawSampleWritesPersistentSample(t *testing.T) {
+	t.Setenv("DS2API_DEV_PACKET_CAPTURE", "true")
 	t.Setenv("DS2API_RAW_STREAM_SAMPLE_ROOT", t.TempDir())
 	devcapture.Global().Clear()
 	defer devcapture.Global().Clear()
@@ -123,6 +124,7 @@ func TestCaptureRawSampleWritesPersistentSample(t *testing.T) {
 }
 
 func TestCaptureRawSampleCombinesContinuationCaptures(t *testing.T) {
+	t.Setenv("DS2API_DEV_PACKET_CAPTURE", "true")
 	t.Setenv("DS2API_RAW_STREAM_SAMPLE_ROOT", t.TempDir())
 	devcapture.Global().Clear()
 	defer devcapture.Global().Clear()
@@ -243,6 +245,7 @@ func TestPreviewTextPreservesUTF8MB4Characters(t *testing.T) {
 }
 
 func TestQueryRawSampleCapturesGroupsBySessionAndMatchesQuestion(t *testing.T) {
+	t.Setenv("DS2API_DEV_PACKET_CAPTURE", "true")
 	devcapture.Global().Clear()
 	defer devcapture.Global().Clear()
 
@@ -330,6 +333,7 @@ func TestBuildCaptureChainsPreservesCaptureOrderWhenTimestampsCollide(t *testing
 }
 
 func TestSaveRawSampleFromCapturesPersistsSelectedChain(t *testing.T) {
+	t.Setenv("DS2API_DEV_PACKET_CAPTURE", "true")
 	root := t.TempDir()
 	t.Setenv("DS2API_RAW_STREAM_SAMPLE_ROOT", root)
 	devcapture.Global().Clear()

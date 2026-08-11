@@ -85,7 +85,12 @@ func (h *Handler) prepareResponsesStreamRuntime(w http.ResponseWriter, resp *htt
 	}
 	streamRuntime := newResponsesStreamRuntime(
 		w, rc, canFlush, responseID, model, finalPrompt, thinkingEnabled, searchEnabled,
-		stripReferenceMarkersEnabled(), toolNames, toolsRaw, len(toolNames) > 0,
+		stripReferenceMarkersEnabled(), toolNames, toolsRaw,
+		// 与 responses_handler.handleResponsesStream 保持一致，无论客户端是否传 tools
+		// 都启用 toolSieve 流式拦截：模型在提示词中被要求使用 <|EPSE|tool_calls> 格式
+		// 输出工具调用，若客户端未传 tools（如“继续会话”请求）而 bufferToolContent 为
+		// false，会导致 EPSE 原文作为正文透传，产生乱码。toolSieve 解析不依赖 toolNames。
+		true,
 		h.toolcallFeatureMatchEnabled() && h.toolcallEarlyEmitHighConfidence(),
 		toolChoice, traceID, func(obj map[string]any) {
 			h.getResponseStore().put(owner, responseID, obj)

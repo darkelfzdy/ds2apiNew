@@ -368,6 +368,33 @@ test('vercel stream continues direct quasi_status incomplete before final tool c
   assert.equal(parsed.at(-1).choices[0].finish_reason, 'tool_calls');
 });
 
+test('vercel stream intercepts EPSE tool calls without client tools', async () => {
+  const { frames } = await runMockVercelStream([
+    'data: {"p":"response/content","v":"<|EPSE|tool_calls><|EPSE|invoke name=\\"search\\"><|EPSE|parameter name=\\"q\\">golang</|EPSE|parameter></|EPSE|invoke></|EPSE|tool_calls>"}\n\n',
+    'data: [DONE]\n\n',
+  ]);
+  const parsed = frames.filter((frame) => frame !== '[DONE]').map((frame) => JSON.parse(frame));
+  const toolDelta = parsed.find((item) => item.choices?.[0]?.delta?.tool_calls);
+  assert.ok(toolDelta, `expected tool_calls delta, frames=${JSON.stringify(frames)}`);
+  const content = parsed.map((item) => item.choices?.[0]?.delta?.content || '').join('');
+  assert.equal(content.includes('<|EPSE|'), false, `expected no raw EPSE leak, content=${JSON.stringify(content)}`);
+  assert.equal(parsed.at(-1).choices[0].finish_reason, 'tool_calls');
+});
+
+test('vercel stream drops text after tool call block', async () => {
+  const { frames } = await runMockVercelStream([
+    'data: {"p":"response/content","v":"前置文本\\n<tool_calls>\\n  <invoke name=\\"read_file\\">\\n    <parameter name=\\"path\\">README.MD</parameter>\\n  </invoke>\\n</tool_calls>\\n尾巴文本"}\n\n',
+    'data: [DONE]\n\n',
+  ]);
+  const parsed = frames.filter((frame) => frame !== '[DONE]').map((frame) => JSON.parse(frame));
+  const toolDelta = parsed.find((item) => item.choices?.[0]?.delta?.tool_calls);
+  assert.ok(toolDelta, `expected tool_calls delta, frames=${JSON.stringify(frames)}`);
+  const content = parsed.map((item) => item.choices?.[0]?.delta?.content || '').join('');
+  assert.equal(content.includes('前置文本'), true, `expected pre-block text streamed, content=${JSON.stringify(content)}`);
+  assert.equal(content.includes('尾巴文本'), false, `expected post-block text dropped, content=${JSON.stringify(content)}`);
+  assert.equal(parsed.at(-1).choices[0].finish_reason, 'tool_calls');
+});
+
 
 
 test('vercel stream usage completion_tokens does not double-count visible output', async () => {

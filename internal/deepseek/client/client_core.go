@@ -30,7 +30,7 @@ type Client struct {
 	cookies  *cookieJar
 
 	proxyClientsMu sync.RWMutex
-	proxyClients   map[string]requestClients
+	proxyClients   map[string]cachedProxyClients
 }
 
 func NewClient(store *config.Store, resolver *auth.Resolver) *Client {
@@ -43,7 +43,7 @@ func NewClient(store *config.Store, resolver *auth.Resolver) *Client {
 		fallback:     &http.Client{Timeout: 60 * time.Second},
 		fallbackS:    &http.Client{Timeout: 0},
 		maxRetries:   3,
-		proxyClients: map[string]requestClients{},
+		proxyClients: map[string]cachedProxyClients{},
 		powCache:     newPowChallengeCache(),
 		cookies:      newCookieJar(),
 	}
@@ -58,4 +58,27 @@ func NewClient(store *config.Store, resolver *auth.Resolver) *Client {
 // PreloadPow 保留兼容接口，纯 Go 实现无需预加载。
 func (c *Client) PreloadPow(_ context.Context) error {
 	return nil
+}
+
+// Close releases pooled upstream connections owned by this client.
+func (c *Client) Close() {
+	if c == nil {
+		return
+	}
+	closeRequestClients(requestClients{
+		regular:   c.regular,
+		stream:    c.stream,
+		fallback:  c.fallback,
+		fallbackS: c.fallbackS,
+	})
+	c.proxyClientsMu.Lock()
+	cached := make([]requestClients, 0, len(c.proxyClients))
+	for key, entry := range c.proxyClients {
+		cached = append(cached, entry.clients)
+		delete(c.proxyClients, key)
+	}
+	c.proxyClientsMu.Unlock()
+	for _, bundle := range cached {
+		closeRequestClients(bundle)
+	}
 }

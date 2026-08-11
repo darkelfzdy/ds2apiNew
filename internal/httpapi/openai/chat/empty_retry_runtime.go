@@ -150,7 +150,12 @@ func (h *Handler) prepareChatStreamRuntime(w http.ResponseWriter, resp *http.Res
 		w, rc, canFlush, completionID, time.Now().Unix(), model, finalPrompt,
 		thinkingEnabled, searchEnabled, stripReferenceMarkersEnabled(), toolNames, toolsRaw,
 		toolChoice,
-		len(toolNames) > 0, h.toolcallFeatureMatchEnabled() && h.toolcallEarlyEmitHighConfidence(),
+		// 无论客户端是否传 tools，都启用 toolSieve 流式拦截：
+		// 模型在提示词中被要求使用 <|EPSE|tool_calls> 格式输出工具调用，
+		// 若客户端未传 tools（如 opencode/rikkahub 的“继续会话”请求），
+		// bufferToolContent 为 false 会导致 EPSE 原文作为正文透传给客户端，
+		// 产生乱码。toolSieve 解析不依赖 toolNames 过滤，空列表也能正常拦截。
+		true, h.toolcallFeatureMatchEnabled() && h.toolcallEarlyEmitHighConfidence(),
 	)
 	streamRuntime.refFileTokens = refFileTokens
 	return streamRuntime, initialType, true

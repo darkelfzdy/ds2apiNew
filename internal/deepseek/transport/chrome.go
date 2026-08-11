@@ -1,10 +1,5 @@
 package transport
 
-import (
-	fhttp2 "github.com/bogdanfinn/fhttp/http2"
-	utls "github.com/refraction-networking/utls"
-)
-
 // ChromeMajorVersion is the Chrome generation advertised at the HTTP layer
 // (User-Agent and sec-ch-ua, both built from it in the protocol package).
 //
@@ -15,57 +10,20 @@ import (
 // check.
 const ChromeMajorVersion = "150"
 
-// TLSChromeVersion is the Chrome generation the uTLS ClientHello reproduces.
+// TLSChromeVersion is the Chrome generation the TLS ClientHello reproduces.
 //
-// This deliberately lags ChromeMajorVersion because uTLS only ships
-// fingerprints it has actually modelled, and HelloChrome_133 is the newest one
-// available (checked against refraction-networking/utls v1.8.2, its latest
-// release). Chrome's ClientHello changes far more slowly than its version
-// number, so reproducing a slightly older handshake costs much less than
-// advertising a User-Agent nobody runs any more.
-//
-// When uTLS gains a newer Chrome, bump both constants together and drop the
-// gap. TestChromeProfileSelfConsistent guards the invariant.
+// This deliberately lags ChromeMajorVersion because the uTLS fingerprints
+// httpcloak builds on only model handshakes they have actually captured.
+// Chrome's ClientHello changes far more slowly than its version number, so
+// reproducing a slightly older handshake costs much less than advertising a
+// User-Agent nobody runs any more.
 const TLSChromeVersion = "133"
 
-// clientHelloID is the browser TLS fingerprint impersonated on every upstream
-// request. Pinned explicitly rather than using utls.HelloChrome_Auto: Auto
-// silently tracks whatever the utls release considers current, which would
-// desynchronise it from TLSChromeVersion on every dependency bump.
-var clientHelloID = utls.HelloChrome_133
-
-// Chrome's HTTP/2 connection preface. Reproducing these exactly is what keeps
-// the "Akamai" HTTP/2 fingerprint (SETTINGS | WINDOW_UPDATE | PRIORITY |
-// pseudo-header order) from reading as Go's net/http2 instead of Chrome's.
+// chromeHeaderOrder pins the request header order. httpcloak applies it on top
+// of its browser preset so every request reaches chat.deepseek.com with a
+// stable, Chrome-like header order.
 //
-// Go's stock net/http2 emits 2:0;4:4194304;5:1048576;6:10485760 with a
-// 1073741824 WINDOW_UPDATE and a,m,p,s pseudo-header order, which is a
-// well-known bot signature.
-const chromeConnectionFlow = 15663105
-
-var chromeSettingsOrder = []fhttp2.SettingID{
-	fhttp2.SettingHeaderTableSize,
-	fhttp2.SettingEnablePush,
-	fhttp2.SettingInitialWindowSize,
-	fhttp2.SettingMaxHeaderListSize,
-}
-
-var chromeSettings = map[fhttp2.SettingID]uint32{
-	fhttp2.SettingHeaderTableSize:   65536,
-	fhttp2.SettingEnablePush:        0,
-	fhttp2.SettingInitialWindowSize: 6291456,
-	fhttp2.SettingMaxHeaderListSize: 262144,
-}
-
-// chromePseudoHeaderOrder is Chrome's :method,:authority,:scheme,:path.
-// Go's net/http2 hardcodes :authority,:method,:path,:scheme instead.
-var chromePseudoHeaderOrder = []string{":method", ":authority", ":scheme", ":path"}
-
-// chromeHeaderOrder pins the request header order. Go's map iteration
-// randomises header order on every request, which is more anomalous than any
-// fixed-but-wrong order: a real browser's order is stable per request shape.
-//
-// Names must be lowercase — fhttp lowercases keys before looking them up in
+// Names must be lowercase — httpcloak lowercases keys before looking them up in
 // the order map, and headers absent from this list are appended afterwards in
 // lexicographic order (still deterministic).
 //
@@ -104,18 +62,11 @@ func ChromeHeaderOrder() []string {
 	return append([]string(nil), chromeHeaderOrder...)
 }
 
-// ChromePseudoHeaderOrder returns a copy of the pinned pseudo-header order.
+// ChromePseudoHeaderOrder returns a copy of the pinned HTTP/2 pseudo-header
+// order.
 func ChromePseudoHeaderOrder() []string {
 	return append([]string(nil), chromePseudoHeaderOrder...)
 }
 
-func newChromeH2Transport() *fhttp2.Transport {
-	return &fhttp2.Transport{
-		Settings:          chromeSettings,
-		SettingsOrder:     chromeSettingsOrder,
-		ConnectionFlow:    chromeConnectionFlow,
-		PseudoHeaderOrder: chromePseudoHeaderOrder,
-		// Chrome does not send legacy PRIORITY frames, so Priorities stays
-		// empty to keep the priority component of the fingerprint at 0.
-	}
-}
+// chromePseudoHeaderOrder is Chrome's :method,:authority,:scheme,:path order.
+var chromePseudoHeaderOrder = []string{":method", ":authority", ":scheme", ":path"}

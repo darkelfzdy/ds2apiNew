@@ -14,7 +14,11 @@ function resolveToolcallPolicy(prepBody, payloadTools) {
   }
   return {
     toolNames,
-    toolSieveEnabled: toolNames.length > 0,
+    // 无论客户端是否传 tools，都启用 toolSieve 流式拦截（与 Go 侧一致）：
+    // 模型在提示词中被要求使用 <|EPSE|tool_calls> 格式输出工具调用，若客户端
+    // 未传 tools（如"继续会话"请求）而拦截关闭，会导致 EPSE 原文作为正文透传，
+    // 产生乱码。toolSieve 解析不依赖工具名过滤，空列表也能正常拦截。
+    toolSieveEnabled: true,
     emitEarlyToolDeltas: true,
   };
 }

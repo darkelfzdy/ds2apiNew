@@ -35,6 +35,11 @@ func BuildToolCallInstructions(toolNames []string) string {
 14) 切勿省略起始标签 <|EPSE|tool_calls>，即使你打算随后使用 </|EPSE|tool_calls> 闭合标签。
 15) 兼容性说明：运行时环境也接受旧版 XML 标签 <tool_calls> / <invoke> / <parameter>，但建议优先使用上述带有 EPSE 前缀的格式。
 
+调用决策：
+- 历史对话中出现的 <|EPSE|tool_calls> 块是已经执行完毕的工具调用记录，其结果已包含在后续的 tool 消息中，属于背景信息而非待办事项。
+- 是否需要调用工具，取决于当前任务还需要什么：若还需要新的信息或操作，请继续调用——同一工具允许用不同参数多次调用（如读取不同文件、执行不同命令），上次调用失败或结果不完整时也可重试；若信息已足够，则直接回答。
+- 不要因历史中曾调用过某工具而回避再次调用，也不要重复执行已经完成且结果正确的调用。
+
 参数格式：
 - string => <|EPSE|parameter name="x"><![CDATA[value]]></|EPSE|parameter>
 - object => <|EPSE|parameter name="x"><field>...</field></|EPSE|parameter>

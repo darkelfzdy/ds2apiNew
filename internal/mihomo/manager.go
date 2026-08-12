@@ -655,17 +655,7 @@ func portListening(port int) bool {
 	return true
 }
 
-// writeFileAtomic 先写临时文件再 rename，避免半截配置。
+// writeFileAtomic 直接写文件，避免在 bind mount 上 rename 失败。
 func writeFileAtomic(path string, content []byte) error {
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, content, 0o644); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		if removeErr := os.Remove(tmp); removeErr != nil {
-			config.Logger.Warn("[mihomo] remove temp config failed", "error", removeErr)
-		}
-		return err
-	}
-	return nil
+	return os.WriteFile(path, content, 0o644)
 }

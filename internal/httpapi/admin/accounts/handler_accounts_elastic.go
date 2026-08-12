@@ -65,6 +65,7 @@ func (h *Handler) updateElasticPool(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.Pool.Reset()
+	h.notifyAccountsChanged()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"success":      true,
 		"elastic_pool": elasticPoolToMap(result),

@@ -183,6 +183,37 @@ func TestUpdateAccountProxyAssignsProxyID(t *testing.T) {
 	if acc.ProxyID != "proxy-1" {
 		t.Fatalf("expected proxy assigned, got %#v", acc)
 	}
+	if acc.NoProxy {
+		t.Fatal("assigning a proxy must clear no_proxy")
+	}
+}
+
+func TestUpdateAccountProxyClearsAssignmentSetsNoProxy(t *testing.T) {
+	h := newAdminProxyTestHandler(t, `{
+		"proxies":[{"id":"proxy-1","name":"Node 1","type":"socks5h","host":"127.0.0.1","port":1080}],
+		"accounts":[{"email":"u@example.com","password":"pwd","proxy_id":"proxy-1"}]
+	}`)
+
+	r := chi.NewRouter()
+	r.Put("/admin/accounts/{identifier}/proxy", h.updateAccountProxy)
+
+	req := httptest.NewRequest(http.MethodPut, "/admin/accounts/u@example.com/proxy", bytes.NewBufferString(`{"proxy_id":""}`))
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d body=%s", rec.Code, rec.Body.String())
+	}
+	acc, ok := h.Store.FindAccount("u@example.com")
+	if !ok {
+		t.Fatal("expected account")
+	}
+	if acc.ProxyID != "" {
+		t.Fatalf("expected proxy assignment cleared, got %#v", acc)
+	}
+	if !acc.NoProxy {
+		t.Fatal("explicitly clearing proxy assignment must set no_proxy")
+	}
 }
 
 func TestTestProxyUsesStoredProxy(t *testing.T) {

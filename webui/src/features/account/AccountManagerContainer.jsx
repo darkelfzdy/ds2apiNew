@@ -28,7 +28,7 @@ export default function AccountManagerContainer({ config, onRefresh, onMessage, 
         resolveAccountIdentifier,
         searchQuery,
         handleSearchChange,
-    } = useAccountsData({ apiFetch })
+    } = useAccountsData({ apiFetch, onConfigRefresh: onRefresh })
 
     const {
         showAddKey,

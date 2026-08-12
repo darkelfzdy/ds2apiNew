@@ -54,8 +54,11 @@ func (d wireDoer) Do(req *http.Request) (*http.Response, error) {
 	return resp, nil
 }
 
+// CloseIdleConnections 把空闲连接清理转发到底层 transport，
+// 供代理配置变更后丢弃已缓存的连接池。
 func (d wireDoer) CloseIdleConnections() {
-	if closer, ok := d.inner.(interface{ CloseIdleConnections() }); ok {
+	type idleCloser interface{ CloseIdleConnections() }
+	if closer, ok := d.inner.(idleCloser); ok {
 		closer.CloseIdleConnections()
 	}
 }

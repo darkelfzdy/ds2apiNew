@@ -36,6 +36,9 @@ func ValidateConfig(c Config) error {
 	if err := ValidateAutoRouteVisionConfig(c.AutoRouteVision); err != nil {
 		return err
 	}
+	if err := ValidateMihomoConfig(c.Mihomo); err != nil {
+		return err
+	}
 	if err := ValidateAccountProxyReferences(c.Accounts, c.Proxies); err != nil {
 		return err
 	}

@@ -30,6 +30,7 @@ import (
 	"ds2api/internal/httpapi/openai/responses"
 	"ds2api/internal/httpapi/openai/shared"
 	"ds2api/internal/httpapi/requestbody"
+	"ds2api/internal/mihomo"
 	"ds2api/internal/webui"
 )
 
@@ -38,6 +39,7 @@ type App struct {
 	Pool     *account.Pool
 	Resolver *auth.Resolver
 	DS       *dsclient.Client
+	Mihomo   *mihomo.Manager
 	Router   http.Handler
 }
 
@@ -73,7 +75,11 @@ func NewApp() (*App, error) {
 	geminiHandler := &gemini.Handler{Store: store, Auth: resolver, DS: dsClient, OpenAI: chatHandler, ChatHistory: chatHistoryStore}
 	ollamaHandler := &ollama.Handler{Store: store}
 	webuiHandler := webui.NewHandler()
-	adminHandler := &admin.Handler{Store: store, Pool: pool, DS: dsClient, OpenAI: chatHandler, ChatHistory: chatHistoryStore, WebUIFallback: webuiHandler.HandleAdminFallback}
+	mihomoMgr := mihomo.NewManager(store, pool)
+	mihomoMgr.SetProxyReset(dsClient.ResetProxyClients)
+	dsClient.SetNodeFailureReporter(mihomoMgr.ReportUpstreamResult)
+	dsClient.SetAccountPoolChanged(mihomoMgr.RequestReconcile)
+	adminHandler := &admin.Handler{Store: store, Pool: pool, DS: dsClient, OpenAI: chatHandler, ChatHistory: chatHistoryStore, Mihomo: mihomoMgr, ResetProxyClients: dsClient.ResetProxyClients, WebUIFallback: webuiHandler.HandleAdminFallback}
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
@@ -129,7 +135,10 @@ func NewApp() (*App, error) {
 		http.NotFound(w, req)
 	})
 
-	return &App{Store: store, Pool: pool, Resolver: resolver, DS: dsClient, Router: r}, nil
+	// 配置启用时后台拉起 mihomo 子进程（Vercel 等不支持子进程的环境自动跳过）。
+	mihomoMgr.StartIfEnabled()
+
+	return &App{Store: store, Pool: pool, Resolver: resolver, DS: dsClient, Mihomo: mihomoMgr, Router: r}, nil
 }
 
 func timeout(d time.Duration) func(http.Handler) http.Handler {

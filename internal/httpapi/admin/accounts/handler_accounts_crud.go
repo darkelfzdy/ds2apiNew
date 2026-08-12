@@ -119,6 +119,7 @@ func (h *Handler) addAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.Pool.Reset()
+	h.notifyAccountsChanged()
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "total_accounts": len(h.Store.Snapshot().Accounts)})
 }
 
@@ -231,6 +232,7 @@ func (h *Handler) toggleAccountEnabled(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.Pool.Reset()
+	h.notifyAccountsChanged()
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "enabled": current})
 }
 
@@ -259,5 +261,6 @@ func (h *Handler) batchToggleAccountEnabled(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	h.Pool.Reset()
+	h.notifyAccountsChanged()
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "total": total, "enabled": enabled})
 }

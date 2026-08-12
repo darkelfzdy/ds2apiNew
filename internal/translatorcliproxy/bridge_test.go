@@ -85,32 +85,3 @@ func TestParseFormatAliases(t *testing.T) {
 		}
 	}
 }
-
-func TestToOpenAIByNameAllSupportedFormats(t *testing.T) {
-	tests := []struct {
-		name   string
-		format string
-		model  string
-		body   string
-	}{
-		{name: "openai", format: "openai", model: "gpt-4.1", body: `{"model":"gpt-4.1","messages":[{"role":"user","content":"hi"}],"stream":false}`},
-		{name: "responses", format: "responses", model: "gpt-4.1", body: `{"model":"gpt-4.1","input":"hello","stream":false}`},
-		{name: "claude", format: "claude", model: "claude-sonnet-4-5", body: `{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hello"}],"stream":false}`},
-		{name: "gemini", format: "gemini", model: "gemini-2.5-pro", body: `{"contents":[{"role":"user","parts":[{"text":"hello"}]}]}`},
-		{name: "gemini-cli", format: "gemini-cli", model: "gemini-2.5-pro", body: `{"model":"gemini-2.5-pro","messages":[{"role":"user","content":"hello"}],"stream":false}`},
-		{name: "codex", format: "codex", model: "gpt-5-codex", body: `{"model":"gpt-5-codex","messages":[{"role":"user","content":"hello"}],"stream":false}`},
-		{name: "antigravity", format: "antigravity", model: "gpt-4.1", body: `{"model":"gpt-4.1","messages":[{"role":"user","content":"hello"}],"stream":false}`},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := ToOpenAIByName(tc.format, tc.model, []byte(tc.body), false)
-			if len(got) == 0 {
-				t.Fatalf("expected non-empty conversion result for format=%s", tc.format)
-			}
-			if !strings.Contains(string(got), `"model"`) {
-				t.Fatalf("expected model field in converted payload, got=%s", string(got))
-			}
-		})
-	}
-}

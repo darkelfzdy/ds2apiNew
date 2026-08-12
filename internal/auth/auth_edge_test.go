@@ -10,7 +10,22 @@ import (
 	"ds2api/internal/config"
 )
 
-// ─── extractCallerToken edge cases ───────────────────────────────────
+func TestJWTRejectsEmptySigningSecret(t *testing.T) {
+	t.Setenv("DS2API_ADMIN_KEY", "")
+	t.Setenv("DS2API_JWT_SECRET", "")
+
+	if _, err := CreateJWT(1); err == nil {
+		t.Fatal("expected JWT creation to fail without a signing secret")
+	}
+
+	header := rawB64Encode([]byte(`{"alg":"HS256","typ":"JWT"}`))
+	payload := rawB64Encode([]byte(`{"iat":4102444800,"exp":4102448400,"role":"admin"}`))
+	message := header + "." + payload
+	forged := message + "." + rawB64Encode(signHS256(message, nil))
+	if _, err := VerifyJWT(forged); err == nil {
+		t.Fatal("expected JWT signed with an empty secret to be rejected")
+	}
+}
 
 func TestExtractCallerTokenBearerPrefix(t *testing.T) {
 	req, _ := http.NewRequest("POST", "/", nil)
@@ -300,6 +315,7 @@ func TestVerifyJWTInvalidFormat(t *testing.T) {
 }
 
 func TestVerifyJWTInvalidSignature(t *testing.T) {
+	t.Setenv("DS2API_ADMIN_KEY", "test-admin-key")
 	token, _ := CreateJWT(1)
 	// Tamper with the signature
 	parts := splitJWT(token)
@@ -322,6 +338,7 @@ func TestVerifyJWTExpired(t *testing.T) {
 }
 
 func TestCreateJWTDefaultExpiry(t *testing.T) {
+	t.Setenv("DS2API_ADMIN_KEY", "test-admin-key")
 	token, err := CreateJWT(0) // should use default
 	if err != nil {
 		t.Fatalf("create jwt failed: %v", err)
@@ -355,6 +372,15 @@ func TestVerifyAdminRequestWithAdminKey(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer test-admin-key")
 	if err := VerifyAdminRequest(req); err != nil {
 		t.Fatalf("expected admin key accepted: %v", err)
+	}
+}
+
+func TestVerifyAdminRequestRejectsImplicitDefaultKey(t *testing.T) {
+	t.Setenv("DS2API_ADMIN_KEY", "")
+	req, _ := http.NewRequest("GET", "/admin/config", nil)
+	req.Header.Set("Authorization", "Bearer admin")
+	if err := VerifyAdminRequest(req); err == nil {
+		t.Fatal("expected implicit default admin key to be rejected")
 	}
 }
 

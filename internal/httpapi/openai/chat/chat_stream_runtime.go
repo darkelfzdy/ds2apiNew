@@ -261,7 +261,9 @@ func (s *chatStreamRuntime) finalize(finishReason string, deferEmptyOutput bool)
 				})
 				s.resetStreamToolCallState()
 			}
-			if evt.Content == "" {
+			if evt.Content == "" || s.toolCallsEmitted {
+				// 已发出 tool_calls 后，Flush 剩余的尾巴正文同样丢弃，
+				// 与 onParsed 中的行为保持一致。
 				continue
 			}
 			cleaned := cleanVisibleOutput(evt.Content, s.stripReferenceMarkers)
@@ -372,6 +374,13 @@ func (s *chatStreamRuntime) onParsed(parsed sse.LineResult) streamengine.ParsedD
 					continue
 				}
 				if evt.Content != "" {
+					// 本回合已发出过 tool_calls 后，后续正文（模型在工具调用块
+					// 之后追加的尾巴文字）不再透传给客户端，避免工具调用
+					// 的最后几行结果泄漏到正文。OpenAI 规范中 tool_calls
+					// 回合的 content 本应为 null/空。
+					if s.toolCallsEmitted {
+						continue
+					}
 					cleaned := cleanVisibleOutput(evt.Content, s.stripReferenceMarkers)
 					if cleaned == "" || (s.searchEnabled && sse.IsCitation(cleaned)) {
 						continue

@@ -17,6 +17,7 @@ import (
 	"ds2api/internal/completionruntime"
 	"ds2api/internal/config"
 	"ds2api/internal/httpapi/openai/history"
+	"ds2api/internal/httpapi/openai/shared"
 	"ds2api/internal/httpapi/requestbody"
 	"ds2api/internal/promptcompat"
 	"ds2api/internal/responsehistory"
@@ -54,9 +55,12 @@ func isGeminiVercelProxyRequest(r *http.Request) bool {
 }
 
 func (h *Handler) handleGeminiDirect(w http.ResponseWriter, r *http.Request, stream bool) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, shared.GeneralMaxSize)
 	raw, err := io.ReadAll(r.Body)
 	if err != nil {
-		if errors.Is(err, requestbody.ErrInvalidUTF8Body) {
+		if requestbody.IsTooLarge(err) {
+			writeGeminiError(w, http.StatusRequestEntityTooLarge, "request body too large")
+		} else if errors.Is(err, requestbody.ErrInvalidUTF8Body) {
 			writeGeminiError(w, http.StatusBadRequest, "invalid json")
 		} else {
 			writeGeminiError(w, http.StatusBadRequest, "invalid body")
@@ -155,9 +159,12 @@ func (h *Handler) handleGeminiDirectStream(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *Handler) proxyViaOpenAI(w http.ResponseWriter, r *http.Request, stream bool) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, shared.GeneralMaxSize)
 	raw, err := io.ReadAll(r.Body)
 	if err != nil {
-		if errors.Is(err, requestbody.ErrInvalidUTF8Body) {
+		if requestbody.IsTooLarge(err) {
+			writeGeminiError(w, http.StatusRequestEntityTooLarge, "request body too large")
+		} else if errors.Is(err, requestbody.ErrInvalidUTF8Body) {
 			writeGeminiError(w, http.StatusBadRequest, "invalid json")
 		} else {
 			writeGeminiError(w, http.StatusBadRequest, "invalid body")

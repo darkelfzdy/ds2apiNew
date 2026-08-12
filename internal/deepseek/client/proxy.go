@@ -25,6 +25,23 @@ type requestClients struct {
 	fallbackS trans.Doer
 }
 
+type cachedProxyClients struct {
+	proxy   config.Proxy
+	clients requestClients
+}
+
+type idleConnectionCloser interface {
+	CloseIdleConnections()
+}
+
+func closeRequestClients(bundle requestClients) {
+	for _, doer := range []trans.Doer{bundle.regular, bundle.stream, bundle.fallback, bundle.fallbackS} {
+		if closer, ok := doer.(idleConnectionCloser); ok {
+			closer.CloseIdleConnections()
+		}
+	}
+}
+
 type hostLookupFunc func(ctx context.Context, network, host string) ([]string, error)
 
 var proxyConnectivityTestURL = "https://chat.deepseek.com/"
@@ -161,12 +178,15 @@ func (c *Client) requestClientsForAccount(acc config.Account) requestClients {
 		return c.defaultRequestClients()
 	}
 
-	key := proxyCacheKey(proxyCfg)
+	key := strings.TrimSpace(proxyCfg.ID)
+	if key == "" {
+		key = proxyCacheKey(proxyCfg)
+	}
 	c.proxyClientsMu.RLock()
 	cached, ok := c.proxyClients[key]
 	c.proxyClientsMu.RUnlock()
-	if ok {
-		return cached
+	if ok && proxyCacheKey(cached.proxy) == proxyCacheKey(proxyCfg) {
+		return cached.clients
 	}
 
 	dialContext, err := proxyDialContext(proxyCfg)
@@ -185,9 +205,18 @@ func (c *Client) requestClientsForAccount(acc config.Account) requestClients {
 
 	c.proxyClientsMu.Lock()
 	if c.proxyClients == nil {
-		c.proxyClients = make(map[string]requestClients)
+		c.proxyClients = make(map[string]cachedProxyClients)
 	}
-	c.proxyClients[key] = bundle
+	if current, exists := c.proxyClients[key]; exists {
+		if proxyCacheKey(current.proxy) == proxyCacheKey(proxyCfg) {
+			c.proxyClientsMu.Unlock()
+			closeRequestClients(bundle)
+			return current.clients
+		}
+		delete(c.proxyClients, key)
+		closeRequestClients(current.clients)
+	}
+	c.proxyClients[key] = cachedProxyClients{proxy: proxyCfg, clients: bundle}
 	c.proxyClientsMu.Unlock()
 	return bundle
 }
@@ -201,10 +230,10 @@ func (c *Client) ResetProxyClients() {
 	}
 	c.proxyClientsMu.Lock()
 	old := c.proxyClients
-	c.proxyClients = map[string]requestClients{}
+	c.proxyClients = map[string]cachedProxyClients{}
 	c.proxyClientsMu.Unlock()
-	for _, bundle := range old {
-		closeRequestClientsIdle(bundle)
+	for _, entry := range old {
+		closeRequestClientsIdle(entry.clients)
 	}
 }
 

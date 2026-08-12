@@ -99,7 +99,7 @@ npm run build --prefix webui
 ```bash
 go run ./cmd/ds2api-tests \
   --config config.json \
-  --admin-key admin \
+  --admin-key "$DS2API_ADMIN_KEY" \
   --out artifacts/testsuite \
   --port 0 \
   --timeout 120 \
@@ -111,7 +111,7 @@ go run ./cmd/ds2api-tests \
 | 参数 | 说明 | 默认值 |
 | --- | --- | --- |
 | `--config` | 配置文件路径 | `config.json` |
-| `--admin-key` | Admin 密钥 | `DS2API_ADMIN_KEY` 环境变量，回退 `admin` |
+| `--admin-key` | Admin 密钥 | `DS2API_ADMIN_KEY` 环境变量；未配置时必须显式传入 |
 | `--out` | 产物输出根目录 | `artifacts/testsuite` |
 | `--port` | 测试服务端口（`0` = 自动分配空闲端口） | `0` |
 | `--timeout` | 单个请求超时秒数 | `120` |

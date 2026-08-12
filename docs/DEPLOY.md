@@ -117,10 +117,13 @@ docker pull ghcr.io/cjackhwang/ds2api:latest
 cp .env.example .env
 cp config.example.json config.json
 
-# 编辑 .env（请改成你的强密码），至少设置：
+# 编辑 .env（请改成你的强密码），至少设置以下任一项：
 #   DS2API_ADMIN_KEY=your-admin-key
+# 或在配置文件的 admin.password_hash 中设置管理员密码哈希
 # 如需修改监听端口（host 模式下生效），可额外设置：
 #   PORT=5001
+# 如需修改宿主机端口，可额外设置：
+#   DS2API_HOST_PORT=6011
 
 # 启动
 docker-compose up -d
@@ -306,6 +309,7 @@ VERCEL_TEAM_ID=team_xxxxxxxxxxxx   # 个人账号可留空
 | `DS2API_ACCOUNT_MAX_QUEUE` | 等待队列上限 | `recommended_concurrency` |
 | `DS2API_GLOBAL_MAX_INFLIGHT` | 全局并发上限 | `recommended_concurrency` |
 | `DS2API_ENV_WRITEBACK` | 检测到 `DS2API_CONFIG_JSON` 时自动写入 `DS2API_CONFIG_PATH`，并在成功后转为文件模式（`1/true/yes/on`） | 关闭 |
+| `DS2API_DEV_PACKET_CAPTURE` | 是否启用开发抓包；可能保存原始请求/响应内容，仅应在隔离调试环境中显式开启 | 关闭 |
 | `DS2API_VERCEL_INTERNAL_SECRET` | 混合流式内部鉴权 | 回退用 `DS2API_ADMIN_KEY` |
 | `DS2API_VERCEL_STREAM_LEASE_TTL_SECONDS` | 流式 lease TTL | `900` |
 | `DS2API_RAW_STREAM_SAMPLE_ROOT` | raw stream 样本保存/读取根目录 | `tests/raw_stream_samples` |
@@ -646,7 +650,7 @@ curl http://127.0.0.1:5001/v1/chat/completions \
 ```bash
 go run ./cmd/ds2api-tests \
   --config config.json \
-  --admin-key admin \
+  --admin-key "$DS2API_ADMIN_KEY" \
   --out artifacts/testsuite \
   --timeout 120 \
   --retries 2

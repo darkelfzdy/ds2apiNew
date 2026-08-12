@@ -2,6 +2,8 @@ package ollama
 
 import (
 	"ds2api/internal/config"
+	"ds2api/internal/httpapi/openai/shared"
+	"ds2api/internal/httpapi/requestbody"
 	"ds2api/internal/util"
 	"encoding/json"
 	"github.com/go-chi/chi/v5"
@@ -38,8 +40,13 @@ func (h *Handler) ListOllamaModels(w http.ResponseWriter, r *http.Request) {
 	WriteJSON(w, http.StatusOK, config.OllamaModelsResponse())
 }
 func (h *Handler) GetOllamaModel(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, shared.GeneralMaxSize)
 	var payload OllamaModelRequest
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		if requestbody.IsTooLarge(err) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "Invalid JSON body: "+err.Error(), http.StatusBadRequest)
 		return
 	}

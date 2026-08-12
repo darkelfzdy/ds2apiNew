@@ -30,7 +30,7 @@ type Client struct {
 	cookies  *cookieJar
 
 	proxyClientsMu sync.RWMutex
-	proxyClients   map[string]requestClients
+	proxyClients   map[string]cachedProxyClients
 
 	// nodeReporter 在每次经代理的上游请求完成后回调“代理 ID + 成败”，
 	// 供 mihomo 代理桥把真实流量结果闭环反馈到节点健康。
@@ -53,7 +53,7 @@ func NewClient(store *config.Store, resolver *auth.Resolver) *Client {
 		fallback:     &http.Client{Timeout: 60 * time.Second},
 		fallbackS:    &http.Client{Timeout: 0},
 		maxRetries:   3,
-		proxyClients: map[string]requestClients{},
+		proxyClients: map[string]cachedProxyClients{},
 		powCache:     newPowChallengeCache(),
 		cookies:      newCookieJar(),
 	}
@@ -90,5 +90,28 @@ func (c *Client) notifyAccountPoolChanged() {
 	c.poolChangedMu.RUnlock()
 	if fn != nil {
 		fn()
+	}
+}
+
+// Close releases pooled upstream connections owned by this client.
+func (c *Client) Close() {
+	if c == nil {
+		return
+	}
+	closeRequestClients(requestClients{
+		regular:   c.regular,
+		stream:    c.stream,
+		fallback:  c.fallback,
+		fallbackS: c.fallbackS,
+	})
+	c.proxyClientsMu.Lock()
+	cached := make([]requestClients, 0, len(c.proxyClients))
+	for key, entry := range c.proxyClients {
+		cached = append(cached, entry.clients)
+		delete(c.proxyClients, key)
+	}
+	c.proxyClientsMu.Unlock()
+	for _, bundle := range cached {
+		closeRequestClients(bundle)
 	}
 }

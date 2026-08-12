@@ -362,6 +362,92 @@ func TestHandleResponsesStreamEmitsDistinctToolCallIDsAcrossSeparateToolBlocks(t
 	}
 }
 
+func TestHandleResponsesStreamNoToolsInterceptsEPSEToolCalls(t *testing.T) {
+	h := &Handler{}
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	rec := httptest.NewRecorder()
+
+	sseLine := func(v string) string {
+		b, _ := json.Marshal(map[string]any{
+			"p": "response/content",
+			"v": v,
+		})
+		return "data: " + string(b) + "\n"
+	}
+
+	streamBody := sseLine(`<|EPSE|tool_calls><|EPSE|invoke name="search"><|EPSE|parameter name="q">golang</|EPSE|parameter></|EPSE|invoke></|EPSE|tool_calls>`) + "data: [DONE]\n"
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(streamBody)),
+	}
+
+	h.handleResponsesStream(rec, req, resp, "owner-a", "resp_test", "deepseek-v4-flash", "prompt", 0, false, false, nil, nil, promptcompat.DefaultToolChoicePolicy(), "")
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "event: response.function_call_arguments.done") {
+		t.Fatalf("expected function_call done event for EPSE block without client tools, body=%s", body)
+	}
+	if strings.Contains(body, "<|EPSE|") {
+		t.Fatalf("expected no raw EPSE markup leaked into output, body=%s", body)
+	}
+}
+
+func TestHandleResponsesStreamDropsTextAfterToolCallBlock(t *testing.T) {
+	h := &Handler{}
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	rec := httptest.NewRecorder()
+
+	sseLine := func(v string) string {
+		b, _ := json.Marshal(map[string]any{
+			"p": "response/content",
+			"v": v,
+		})
+		return "data: " + string(b) + "\n"
+	}
+
+	streamBody := sseLine("前置文本\n<tool_calls>\n  <invoke name=\"read_file\">\n    <parameter name=\"path\">README.MD</parameter>\n  </invoke>\n</tool_calls>\n尾巴文本") + "data: [DONE]\n"
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(streamBody)),
+	}
+
+	h.handleResponsesStream(rec, req, resp, "owner-a", "resp_test", "deepseek-v4-flash", "prompt", 0, false, false, []string{"read_file"}, nil, promptcompat.DefaultToolChoicePolicy(), "")
+
+	body := rec.Body.String()
+	textDeltas := extractSSEEventPayloads(body, "response.output_text.delta")
+	var streamed strings.Builder
+	for _, payload := range textDeltas {
+		streamed.WriteString(asString(payload["delta"]))
+	}
+	got := streamed.String()
+	if !strings.Contains(got, "前置文本") {
+		t.Fatalf("expected text before tool block to be streamed, got %q", got)
+	}
+	if strings.Contains(got, "尾巴文本") {
+		t.Fatalf("expected text after tool block to be dropped, got %q", got)
+	}
+	if !strings.Contains(body, "event: response.function_call_arguments.done") {
+		t.Fatalf("expected function_call done event, body=%s", body)
+	}
+}
+
+func TestResponsesRetryRuntimeAlwaysBuffersToolContent(t *testing.T) {
+	h := &Handler{}
+	rec := httptest.NewRecorder()
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader("data: [DONE]\n")),
+	}
+
+	streamRuntime, _, ok := h.prepareResponsesStreamRuntime(rec, resp, "owner-a", "resp-retry-test", "deepseek-v4-flash", "prompt", 0, false, false, nil, nil, promptcompat.DefaultToolChoicePolicy(), "", nil)
+	if !ok {
+		t.Fatalf("expected runtime prepared, code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !streamRuntime.bufferToolContent {
+		t.Fatalf("expected bufferToolContent=true for no-tools empty-retry path")
+	}
+}
+
 func TestHandleResponsesStreamRequiredToolChoiceFailure(t *testing.T) {
 	h := &Handler{}
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)

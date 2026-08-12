@@ -37,6 +37,7 @@ func adminReq(method, path string, body []byte) *http.Request {
 }
 
 func TestConfigImportIgnoresTokenFieldInPayload(t *testing.T) {
+	t.Setenv("DS2API_ADMIN_KEY", "admin")
 	ds := &testingDSMock{}
 	router := newHTTPAdminHarness(t, `{"accounts":[]}`, ds)
 
@@ -72,6 +73,7 @@ func TestConfigImportIgnoresTokenFieldInPayload(t *testing.T) {
 }
 
 func TestAccountTestRefreshesRuntimeTokenButExportOmitsToken(t *testing.T) {
+	t.Setenv("DS2API_ADMIN_KEY", "admin")
 	ds := &testingDSMock{}
 	router := newHTTPAdminHarness(t, `{
 		"accounts":[{"email":"batch@example.com","password":"pwd","token":"stale-token"}]

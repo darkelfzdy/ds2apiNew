@@ -60,6 +60,11 @@ func main() {
 		}
 	}()
 
+	// 启动上游版本更新 bark 推送定时任务（未配置 DS2API_UPDATE_NOTIFY_BARK 时自动禁用）。
+	appCtx, cancelUpdate := context.WithCancel(context.Background())
+	defer cancelUpdate()
+	go app.Update.Start(appCtx)
+
 	// Wait for interrupt signal (Ctrl+C / SIGTERM).
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)

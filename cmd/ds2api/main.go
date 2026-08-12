@@ -78,6 +78,10 @@ func main() {
 		config.Logger.Error("graceful shutdown failed, forcing exit", "error", err)
 		os.Exit(1)
 	}
+	// 回收 Mihomo 代理桥子进程，避免残留占用本地端口。
+	if app.Mihomo != nil {
+		app.Mihomo.Stop()
+	}
 	config.Logger.Info("server gracefully stopped")
 }
 

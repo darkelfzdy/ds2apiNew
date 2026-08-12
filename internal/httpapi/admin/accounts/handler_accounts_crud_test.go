@@ -1,6 +1,7 @@
 package accounts
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -87,6 +88,32 @@ func TestUpdateAccountMetadataPreservesCredentials(t *testing.T) {
 	}
 }
 
+func TestToggleAccountEnabledNotifiesOnAccountsChanged(t *testing.T) {
+	h := newAdminTestHandler(t, `{
+		"accounts":[{"email":"u@example.com","password":"pwd","disabled":true}]
+	}`)
+	called := 0
+	h.OnAccountsChanged = func() { called++ }
+
+	r := chi.NewRouter()
+	r.Put("/admin/accounts/{identifier}/enabled", h.toggleAccountEnabled)
+
+	req := httptest.NewRequest(http.MethodPut, "/admin/accounts/u@example.com/enabled", bytes.NewBufferString(`{"enabled":true}`))
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d body=%s", rec.Code, rec.Body.String())
+	}
+	if called != 1 {
+		t.Fatalf("expected OnAccountsChanged invoked once, got %d", called)
+	}
+	acc, ok := h.Store.FindAccount("u@example.com")
+	if !ok || !acc.IsEnabled() {
+		t.Fatalf("account should be enabled after toggle, got %#v", acc)
+	}
+}
+
 func TestListAccountsMasksTokenPreview(t *testing.T) {
 	h := newAdminTestHandler(t, `{
 		"accounts":[{"email":"u@example.com","password":"pwd"}]
@@ -94,7 +121,6 @@ func TestListAccountsMasksTokenPreview(t *testing.T) {
 	if err := h.Store.UpdateAccountToken("u@example.com", "abcdefgh"); err != nil {
 		t.Fatalf("seed runtime token: %v", err)
 	}
-
 	req := httptest.NewRequest(http.MethodGet, "/admin/accounts?page=1&page_size=10", nil)
 	rec := httptest.NewRecorder()
 	h.listAccounts(rec, req)

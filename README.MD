@@ -49,6 +49,7 @@
 - [配置说明](#配置说明)
 - [鉴权模式](#鉴权模式)
 - [并发模型](#并发模型)
+- [Mihomo 代理桥（一号一 IP）](#mihomo-代理桥一号一-ip)
 - [Tool Call 适配](#tool-call-适配)
 - [本地开发抓包工具](#本地开发抓包工具)
 - [文档索引](#文档索引)
@@ -128,6 +129,7 @@ flowchart LR
 | Ollama 兼容 | `GET /api/version`、`GET /api/tags`、`POST /api/show` |
 | 统一 CORS 兼容 | `/v1/*`、`/anthropic/*`、`/v1beta/models/*`、`/api/*`、`/admin/*` 统一走同一套 CORS 策略；Vercel 上 `/v1/chat/completions` 的 Node Runtime 也对齐相同放行规则，尽量减少第三方预检请求头限制 |
 | 多账号轮询 | 自动 token 刷新、邮箱/手机号双登录方式 |
+| Mihomo 代理桥（一号一 IP） | 机场订阅转本地独立 SOCKS5 端口，账号绑定独占节点出口，实现“一个账号一个 IP”防连坐；含自动测速、故障转移、一键分配（详见 [MIHOMO_BRIDGE.md](docs/MIHOMO_BRIDGE.md)） |
 | 并发队列控制 | 每账号 in-flight 上限 + 等待队列，动态计算建议并发值 |
 | DeepSeek PoW | 纯 Go 高性能实现（DeepSeekHashV1），毫秒级响应 |
 | Tool Calling | 防泄漏处理：非代码块高置信特征识别、`delta.tool_calls` 早发、结构化增量输出 |
@@ -233,7 +235,7 @@ cp config.example.json config.json
 
 ### 方式二：Docker 运行
 
-从最新 Release 下载 `docker-compose.tar.gz`（内含 `docker-compose.yml`、`config.example.json`、`.env.example`、`README.MD` 四个文件）：
+从最新 Release 下载 `docker-compose.tar.gz`（内含 `docker-compose.yml`、`docker-compose.windows.yml`、`config.example.json`、`.env.example`、`README.MD` 五个文件）：
 
 ```bash
 # 1. 下载并解压
@@ -245,7 +247,7 @@ tar -xzf docker-compose.tar.gz
 cp .env.example .env
 cp config.example.json config.json
 
-# 3. 编辑 .env（至少设置 DS2API_ADMIN_KEY；如需修改宿主机端口，可额外设置 DS2API_HOST_PORT）
+# 3. 编辑 .env（至少设置 DS2API_ADMIN_KEY；如需修改监听端口可设置 PORT）
 nano .env
 #    DS2API_ADMIN_KEY=请替换为强密码
 
@@ -256,7 +258,25 @@ docker compose up -d
 docker compose logs -f
 ```
 
-默认 `docker-compose.yml` 会把宿主机 `6011` 映射到容器内的 `5001`。如果你希望直接对外暴露 `5001`，请设置 `DS2API_HOST_PORT=5001`（或者手动调整 `ports` 配置）。
+`docker-compose.yml` 默认使用 **host 网络模式**（`network_mode: host`）：ds2api 与
+Mihomo 代理桥的端口（`5001` 与节点监听端口 `10801` 起）直接落在宿主机上，避免
+bridge 网络端口映射隔离导致代理桥 `Connection Refused`。监听端口由 `.env` 中的
+`PORT` 控制（默认 `5001`）；host 模式下 `ports` 映射不生效。
+Compose 还会把宿主机的 CA 根证书（`/etc/ssl/certs/ca-certificates.crt`）只读挂载
+进容器，避免容器内拉取 HTTPS 机场订阅时报
+`x509: certificate signed by unknown authority`（镜像本身也已内置 CA 根证书）。
+> **host 网络模式仅适用于 Linux 宿主机**（Linux 服务器是主要部署形态，默认即此）。
+> 使用 Docker Desktop（Windows/macOS）时请改用覆盖文件：
+>
+> ```bash
+> docker compose -f docker-compose.yml -f docker-compose.windows.yml up -d
+> ```
+>
+> 它会回退到 bridge + 端口映射（`${DS2API_HOST_PORT:-6011}:5001`）。代理桥的
+> mihomo 是容器内子进程，SOCKS5 监听都在容器自身 `127.0.0.1` 上，bridge 下同样
+> 可用，无需 host 网络。若挂载 `/etc/ssl/certs/ca-certificates.crt` 报
+> "bind mount source does not exist"，把该行从 `docker-compose.yml` 的 `volumes`
+> 注释掉即可（镜像已内置 CA 根证书）。
 同时默认把 `./config.json` 挂载到容器 `/data/config.json`，并设置 `DS2API_CONFIG_PATH=/data/config.json`，用于避免 `/app` 只读导致运行时 token 持久化失败。
 镜像会预创建 `/data` 并授权给非 root 的 `ds2api` 用户；如果使用单文件 bind mount，请确保宿主机 `config.json` 对容器用户可读写，例如 `chmod 644 config.json`。
 
@@ -367,6 +387,21 @@ Gemini 路由还可以使用 `x-goog-api-key`，或在没有认证头时使用 `
 - completion 空输出类 429 会先做同账号补偿重试；托管账号模式还会在最终返回 429 前切到另一个可用账号 fresh retry 一次
 - `GET /admin/queue/status` 返回实时并发状态
 
+## Mihomo 代理桥（一号一 IP）
+
+ds2api 内置的 **Mihomo 代理桥** 可以把机场订阅节点转换为本地独立 SOCKS5 端口，并把每个 DeepSeek 账号绑定到独占节点出口，实现“一个账号一个 IP”的防连坐效果，显著降低多账号同出口 IP 触发风控的概率。分流发生在统一的 DeepSeek client 层，因此 OpenAI / Claude / Gemini / Ollama 等所有协议入口自动继承该能力，无需分别适配。
+
+### 快速开始
+
+1. **准备 mihomo 内核（Clash.Meta）**：登录 WebUI 管理台，进入左侧 **代理桥** 页，点击 **下载mihomo** 按钮自动下载、解压并放好内核（仅当探测不到二进制时可用）；或手动从 [MetaCubeX/mihomo Releases](https://github.com/MetaCubeX/mihomo/releases) 下载对应平台的包，重命名为 `mihomo`（Windows 为 `mihomo.exe`）后放到 ds2api 同目录或 `bin/` 子目录。
+2. **启用代理桥**：在“代理桥”页打开 **启用代理桥** 并保存设置（`base_port` / `api_port` 通常无需修改）。
+3. **添加订阅**：填入机场订阅链接，等待解析出节点。支持 Clash/Mihomo YAML、Base64 整体编码订阅，以及按行 `vmess://` `ss://` `trojan://` `vless://` `hysteria2://` 等分享链接。
+4. **测试延迟（可选）**：点击 **测试延迟** 批量测速（经节点隧道请求 `https://www.google.com/generate_204` 计真实连接延迟）；成功节点按延迟升序排列，失败/超时节点垫底。
+5. **绑定账号**：为每个账号选择独占节点，或点击 **一键分配账号绑定** 批量分配（推荐先测延迟，只绑定测试成功的节点）。绑定后账号请求即经 `127.0.0.1:<分配端口>` 从对应节点出口发出。
+6. 可再开启 **自动调度（auto_bind）**：后台定时“测速 + 自动分配”，坏节点自动把账号安全转移到健康节点（含 15 分钟换号冷却，避免反复横跳），新启用/补位的账号自动分配健康节点；在“代理桥”页显式解绑的账号会强制走直连，不再被自动绑回。
+
+> 详细工作原理、配置字段、环境变量与注意事项见 **[docs/MIHOMO_BRIDGE.md](docs/MIHOMO_BRIDGE.md)**。
+
 ## Tool Call 适配
 
 当请求中带 `tools` 时，DS2API 会做防泄漏处理与结构化转译：
@@ -418,6 +453,7 @@ go run ./cmd/ds2api
 | 文档 | 说明 |
 | --- | --- |
 | [API.md](API.md) / [API.en.md](API.en.md) | API 接口文档（含请求/响应示例） |
+| [MIHOMO_BRIDGE.md](docs/MIHOMO_BRIDGE.md) | Mihomo 代理桥（一号一 IP）原理、配置字段、环境变量与使用教程 |
 | [DEPLOY.md](docs/DEPLOY.md) / [DEPLOY.en.md](docs/DEPLOY.en.md) | 部署指南（本地/Docker/Vercel/systemd） |
 | [CONTRIBUTING.md](docs/CONTRIBUTING.md) / [CONTRIBUTING.en.md](docs/CONTRIBUTING.en.md) | 贡献指南 |
 | [TESTING.md](docs/TESTING.md) | 测试集使用指南 |

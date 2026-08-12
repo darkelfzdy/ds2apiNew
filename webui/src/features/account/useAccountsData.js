@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 
-export function useAccountsData({ apiFetch }) {
+export function useAccountsData({ apiFetch, onConfigRefresh }) {
     const [queueStatus, setQueueStatus] = useState(null)
     const [keysExpanded, setKeysExpanded] = useState(false)
 
@@ -30,6 +30,10 @@ export function useAccountsData({ apiFetch }) {
                 setTotalPages(data.total_pages || 1)
                 setTotalAccounts(data.total || 0)
                 setPage(data.page || 1)
+                // 账号列表是最新的（自动调度可能在后台重绑了账号），
+                // 同步刷新 config 让 proxies（含托管代理名）不过期，
+                // 避免账号显示成 mihomo-<hash> 的原始代理 ID。
+                onConfigRefresh?.()
             }
         } catch (e) {
             console.error('Failed to fetch accounts:', e)

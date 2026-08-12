@@ -51,6 +51,12 @@ func (h *Handler) configImport(w http.ResponseWriter, r *http.Request) {
 			next.Accounts = normalizeAndDedupeAccounts(next.Accounts)
 			next.VercelSyncHash = c.VercelSyncHash
 			next.VercelSyncTime = c.VercelSyncTime
+			if len(incoming.Mihomo.Subscriptions) == 0 && len(incoming.Mihomo.PortMap) == 0 {
+				// 订阅与端口映射由 mihomo_subscriptions.json 独立维护，
+				// 导入的 config 通常不再携带；若未提供则保留现有状态，避免误删。
+				next.Mihomo.Subscriptions = c.Mihomo.Subscriptions
+				next.Mihomo.PortMap = c.Mihomo.PortMap
+			}
 			importedKeys = len(next.APIKeys)
 			importedAccounts = len(next.Accounts)
 		} else {

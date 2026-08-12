@@ -24,6 +24,7 @@ type Config struct {
 	ExpertPromptSegment  ExpertPromptSegmentConfig  `json:"expert_prompt_segment,omitempty"`
 	AutoRouteVision      AutoRouteVisionConfig      `json:"auto_route_vision,omitempty"`
 	ElasticPool          ElasticPoolConfig          `json:"elastic_pool,omitempty"`
+	Mihomo               MihomoConfig               `json:"mihomo,omitempty"`
 	Vercel               VercelConfig               `json:"vercel,omitempty"`
 	VercelSyncHash       string                     `json:"_vercel_sync_hash,omitempty"`
 	VercelSyncTime       int64                      `json:"_vercel_sync_time,omitempty"`
@@ -50,6 +51,12 @@ type Account struct {
 	// 在收到验证码挑战后主动设置的——挑战意味着风控已经盯上这个账号，
 	// 继续用它只会把情况变得更糟。
 	CooldownUntil float64 `json:"cooldown_until,omitempty"`
+	// NodeCooldownUntil 是坏节点自动安全转移后账号的换号冷却到期时间（Unix 秒）。
+	// 冷却期内自动调度不会再次切换该账号的节点，避免故障节点间反复横跳。
+	NodeCooldownUntil float64 `json:"node_cooldown_until,omitempty"`
+	// NoProxy 表示账号被显式解绑、强制走直连（不走代理）。置位后自动调度
+	// （auto_bind 补位 / 一键分配）不再给该账号分配节点，直到用户显式重新绑定。
+	NoProxy bool `json:"no_proxy,omitempty"`
 }
 
 type APIKey struct {
@@ -121,6 +128,7 @@ func (c *Config) NormalizeCredentials() {
 	}
 
 	c.Vercel = NormalizeVercelConfig(c.Vercel)
+	c.Mihomo = NormalizeMihomoConfig(c.Mihomo)
 	c.normalizeModelAliases()
 }
 

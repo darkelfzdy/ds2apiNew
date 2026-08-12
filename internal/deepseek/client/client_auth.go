@@ -163,7 +163,10 @@ func (c *Client) persistMutedUntil(identifier string, muteUntil float64) {
 		return nil
 	}); err != nil {
 		config.Logger.Error("[muted_account] failed to persist muted_until", "account", identifier, "error", err)
+		return
 	}
+	// 弹性号池可能借机启用补位账号，通知桥立即按已有测速结果分配节点。
+	c.notifyAccountPoolChanged()
 }
 
 // isUserBannedResponse 判断登录响应是否表示账号被上游停用（USER_IS_BANNED）。
@@ -200,6 +203,7 @@ func (c *Client) persistBannedAccount(identifier string, reason string) {
 	if c.Auth != nil && c.Auth.Pool != nil {
 		c.Auth.Pool.Reset()
 	}
+	c.notifyAccountPoolChanged()
 	config.Logger.Warn("[banned_account] account disabled after USER_IS_BANNED", "account", identifier, "reason", reason)
 }
 
@@ -232,6 +236,7 @@ func (c *Client) clearBannedAccount(identifier string) {
 	if c.Auth != nil && c.Auth.Pool != nil {
 		c.Auth.Pool.Reset()
 	}
+	c.notifyAccountPoolChanged()
 	config.Logger.Info("[banned_account] account re-enabled after successful token refresh", "account", identifier)
 }
 
@@ -290,7 +295,10 @@ func (c *Client) persistCooldownUntil(identifier string, until float64) {
 		return nil
 	}); err != nil {
 		config.Logger.Error("[captcha] failed to persist cooldown_until", "account", identifier, "error", err)
+		return
 	}
+	// 弹性号池可能借机启用补位账号，通知桥立即按已有测速结果分配节点。
+	c.notifyAccountPoolChanged()
 }
 
 func (c *Client) CreateSession(ctx context.Context, a *auth.RequestAuth, maxAttempts int) (string, error) {

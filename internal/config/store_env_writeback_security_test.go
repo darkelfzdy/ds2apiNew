@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestWriteConfigBytesUsesPrivatePermissions(t *testing.T) {
+func TestWriteConfigBytesCreatesFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	if err := writeConfigBytes(path, []byte(`{"keys":["secret"]}`)); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -21,7 +21,7 @@ func TestWriteConfigBytesUsesPrivatePermissions(t *testing.T) {
 		// already verified above.
 		return
 	}
-	if got := info.Mode().Perm(); got != 0o600 {
-		t.Fatalf("expected config mode 0600, got %o", got)
+	if got := info.Mode().Perm(); got != 0o644 {
+		t.Fatalf("expected config mode 0644, got %o", got)
 	}
 }

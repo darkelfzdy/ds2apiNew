@@ -40,6 +40,10 @@ func (h *Handler) PreprocessInlineTextFilesForExpert(ctx context.Context, a *aut
 		return nil
 	}
 	if h.Store == nil || !h.Store.ExpertTextFileInlineEnabled() {
+		if ids := collectTopLevelFileIDs(req); len(ids) > 0 {
+			config.Logger.Warn("[expert_attachment_dropped] expert_text_file_inline is disabled; top-level file attachments will not reach the expert model",
+				"file_ids", ids)
+		}
 		return nil
 	}
 	state := &expertTextInlineState{
@@ -111,6 +115,8 @@ func (s *expertTextInlineState) inlineTopLevelRefs(req map[string]any) error {
 			}
 		}
 		if !IsTextFile(filename, mimeType, s.allowedExts) {
+			config.Logger.Warn("[expert_attachment_dropped] non-text attachment is dropped for expert model; file content will not reach upstream",
+				"file_id", fileID, "filename", filename, "mime_type", mimeType)
 			continue
 		}
 		if err := s.checkSize(len(data), filename); err != nil {
@@ -254,6 +260,8 @@ func (s *expertTextInlineState) tryInlineTextBlock(block map[string]any) (map[st
 		// Non-text inline files are left untouched for expert models; they
 		// cannot be forwarded as references and will be ignored by prompt
 		// normalization, but removing them here is not our concern.
+		config.Logger.Warn("[expert_attachment_dropped] non-text inline attachment is dropped for expert model; file content will not reach upstream",
+			"filename", decoded.Filename, "content_type", decoded.ContentType)
 		return nil, false, nil
 	}
 	if err := s.checkSize(len(decoded.Data), decoded.Filename); err != nil {
@@ -284,6 +292,8 @@ func (s *expertTextInlineState) inlineStoredFile(fileID string, block map[string
 	if !IsTextFile(filename, mimeType, s.allowedExts) {
 		// Non-text uploaded files are left untouched; they will be dropped from
 		// the expert payload later because ref_file_ids is cleared.
+		config.Logger.Warn("[expert_attachment_dropped] non-text uploaded attachment is dropped for expert model; file content will not reach upstream",
+			"file_id", fileID, "filename", filename, "mime_type", mimeType)
 		return nil, false, nil
 	}
 	if err := s.checkSize(len(data), filename); err != nil {

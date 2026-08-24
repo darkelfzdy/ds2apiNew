@@ -2,7 +2,9 @@ package completionruntime
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"strings"
 
 	"ds2api/internal/assistantturn"
 	"ds2api/internal/auth"
@@ -50,6 +52,12 @@ func StartCompletionWithSegments(ctx context.Context, ds DeepSeekCaller, a *auth
 // FireCompletionAndStop and returns the PoW and payload for the final segment.
 // The returned payload still carries the parent_message_id chain so the caller
 // can either stream it directly or continue it with a retry payload.
+//
+// 当某个分段发送失败、或发送后上游未确认消息已提交（ErrSegmentCommitUnconfirmed）
+// 时，parent_message_id 链已不可信：继续链式续发会让上游无法把前序分段并入
+// 上下文，最终回复表现为"丢失上下文"。此时回退为单消息发送剩余全部内容
+// （分段由 SplitByMaxRunes 硬切，按序拼接即还原原文），并把已成功提交的
+// 最后一个 parent 作为该消息的 parent，保证最终请求携带尽可能完整的上下文。
 func fireSegmentPayloads(ctx context.Context, ds DeepSeekCaller, a *auth.RequestAuth, stdReq promptcompat.StandardRequest, sessionID string, segments []string, maxAttempts int) (string, map[string]any, *assistantturn.OutputError) {
 	parentMessageID := 0
 	for i := 0; i < len(segments)-1; i++ {
@@ -64,8 +72,13 @@ func fireSegmentPayloads(ctx context.Context, ds DeepSeekCaller, a *auth.Request
 			if dsclient.IsMutedError(err) {
 				return "", nil, &assistantturn.OutputError{Status: http.StatusForbidden, Message: "Account is muted by upstream.", Code: "account_muted"}
 			}
-			config.Logger.Warn("[start_completion_with_segments] segment fire-and-stop failed", "segment_index", i, "session_id", sessionID, "parent_message_id", parentMessageID, "error", err)
-			return "", nil, &assistantturn.OutputError{Status: http.StatusInternalServerError, Message: "Failed to send segment before stop: " + err.Error(), Code: "error"}
+			fallbackPrompt := strings.Join(segments[i:], "")
+			unconfirmed := errors.Is(err, dsclient.ErrSegmentCommitUnconfirmed)
+			config.Logger.Warn("[expert_segment_fallback] segment send failed, falling back to single-message prompt",
+				"segment_index", i, "segment_total", len(segments), "session_id", sessionID,
+				"parent_message_id", parentMessageID, "commit_unconfirmed", unconfirmed, "error", err)
+			logSegmentPayload("fallback", i, len(segments), sessionID, parentMessageID, fallbackPrompt)
+			return finishSegmentFallback(ctx, ds, a, stdReq, sessionID, parentMessageID, fallbackPrompt, maxAttempts)
 		}
 		parentMessageID = respID
 	}
@@ -76,6 +89,18 @@ func fireSegmentPayloads(ctx context.Context, ds DeepSeekCaller, a *auth.Request
 	}
 	finalPayload := stdReq.CompletionPayloadWithParentAndPrompt(sessionID, parentMessageID, segments[len(segments)-1])
 	logSegmentPayload("final", len(segments)-1, len(segments), sessionID, parentMessageID, segments[len(segments)-1])
+	return finalPow, finalPayload, nil
+}
+
+// finishSegmentFallback 构造回退路径的最终 payload：把剩余分段合并为一条
+// 消息发送，parent 沿用最后一个已成功提交的分段，避免依赖断裂的链。
+func finishSegmentFallback(ctx context.Context, ds DeepSeekCaller, a *auth.RequestAuth, stdReq promptcompat.StandardRequest, sessionID string, parentMessageID int, fallbackPrompt string, maxAttempts int) (string, map[string]any, *assistantturn.OutputError) {
+	finalPow, err := ds.GetPow(ctx, a, maxAttempts)
+	if err != nil {
+		return "", nil, &assistantturn.OutputError{Status: http.StatusUnauthorized, Message: "Failed to get PoW (invalid token or unknown error).", Code: "error"}
+	}
+	finalPayload := stdReq.CompletionPayloadWithParentAndPrompt(sessionID, parentMessageID, fallbackPrompt)
+	logSegmentPayload("fallback", -1, -1, sessionID, parentMessageID, fallbackPrompt)
 	return finalPow, finalPayload, nil
 }
 

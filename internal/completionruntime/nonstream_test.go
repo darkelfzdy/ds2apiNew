@@ -21,6 +21,8 @@ type fakeDeepSeekCaller struct {
 	completionAccounts []string
 	sessionByAccount   bool
 	fireAndStopCounter int
+	// fireAndStopErrs 每次 FireCompletionAndStop 消费一个；nil 表示该次成功。
+	fireAndStopErrs []error
 }
 
 type currentInputRuntimeConfig struct{}
@@ -68,6 +70,13 @@ func (f *fakeDeepSeekCaller) FireCompletionAndStop(_ context.Context, a *auth.Re
 	f.payloads = append(f.payloads, payload)
 	if a != nil {
 		f.completionAccounts = append(f.completionAccounts, a.AccountID)
+	}
+	if len(f.fireAndStopErrs) > 0 {
+		err := f.fireAndStopErrs[0]
+		f.fireAndStopErrs = f.fireAndStopErrs[1:]
+		if err != nil {
+			return 0, err
+		}
 	}
 	f.fireAndStopCounter++
 	return 100 + f.fireAndStopCounter, nil

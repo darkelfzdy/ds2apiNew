@@ -23,6 +23,13 @@ const (
 	segmentSettleDelay        = 1 * time.Second
 )
 
+// ErrSegmentCommitUnconfirmed 表示分段消息发出后，上游未确认该消息已提交到会话树
+// （stop_stream 后既未收到 event: close 也未正常读完流，连接被强制关闭）。
+// 此时 parent_message_id 链不可信：若继续以该消息为 parent 续发，上游可能
+// 无法把前序分段并入上下文，导致最终回复丢失上下文。调用方应回退为
+// 单消息发送剩余内容，而不是依赖链式提交。
+var ErrSegmentCommitUnconfirmed = errors.New("segment commit not confirmed by upstream")
+
 func (c *Client) StopStream(ctx context.Context, a *auth.RequestAuth, sessionID string, messageID int) error {
 	if strings.TrimSpace(sessionID) == "" || messageID <= 0 {
 		return errors.New("missing stop_stream identifiers")
@@ -226,13 +233,24 @@ func (c *Client) FireCompletionAndStop(ctx context.Context, a *auth.RequestAuth,
 
 	// After stop, wait for upstream's event: close confirmation (message committed)
 	// or drain completion, with a timeout fallback.
+	//
+	// 提交确认是分段续发的关键前提：只有消息确实落库，后续分段才能以它为
+	// parent 把上下文串起来。close 事件与正常读完流都视为已提交；超时强制
+	// 关闭连接意味着状态未知，继续依赖该消息做 parent 会让后续分段丢失前文，
+	// 因此返回 ErrSegmentCommitUnconfirmed 让调用方回退为单消息发送。
+	commitConfirmed := false
 	select {
 	case <-closeCh:
+		commitConfirmed = true
 		config.Logger.Info("[fire_completion_and_stop] upstream close confirmed", "session_id", sessionID, "account", a.AccountID, "response_message_id", responseMessageID)
 	case <-drainDone:
+		commitConfirmed = true
 		config.Logger.Info("[fire_completion_and_stop] drain completed", "session_id", sessionID, "account", a.AccountID, "response_message_id", responseMessageID)
 	case <-time.After(segmentDrainTimeout):
-		config.Logger.Warn("[fire_completion_and_stop] drain stream timed out, forcing close", "session_id", sessionID, "account", a.AccountID)
+		config.Logger.Warn("[fire_completion_and_stop] drain stream timed out, forcing close", "session_id", sessionID, "account", a.AccountID, "response_message_id", responseMessageID)
+	}
+	if !commitConfirmed {
+		return 0, ErrSegmentCommitUnconfirmed
 	}
 
 	// Brief settle after upstream close confirmation to let the session

@@ -412,6 +412,7 @@ Parameters: ...
 - 账号切换重试时也会在新 session 上重新走分段发送，保证切换后仍完整提交所有段。
 - 分段发送返回的 `StartResult` 与 `StartCompletion` 完全一致，下游 `ExecuteNonStreamStartedWithRetry` / `ExecuteStreamWithRetry` 无缝接入。
 - Vercel stream 链路（`__stream_prepare` / `__stream_switch`）同样接入分段：prepare 在 Go 侧先对前 N-1 段执行 `FireCompletionAndStop`，只把最后一段的 payload 交给 Node 层直连 DeepSeek；账号切换时会在新 session 上重新分段。
+- 降级回退：分段链依赖上游"stop 后消息已提交到会话树"。若某段发送失败、或 stop 后未收到提交确认（未等到 `event: close` 且连接被超时强制关闭，`ErrSegmentCommitUnconfirmed`），继续以该段为 parent 续发会让上游无法把前序分段并入上下文，最终表现为"PRO 模型丢失上下文"。此时 runtime 回退为单消息发送：把剩余分段按序拼接还原原文（分段是 rune 硬切，拼接即原文），并以最后一个已确认提交的分段 id 作为 parent，保证最终请求携带尽可能完整的上下文而不是直接报错。回退会记录 `[expert_segment_fallback]` 告警日志，便于线上确认。
 
 相关实现：
 
@@ -432,7 +433,7 @@ expert（pro）模型本身不会收到任何 `ref_file_ids` 或 inline 文件�
 
 - 默认开启；仅对 `model_type == "expert"` 的模型生效。
 - 非 expert 模型保持原行为：文件走 `ref_file_ids` 上传引用。
-- 内联前会校验文件扩展名或 MIME 类型；非文本文件（图片、PDF 等）会被保留但 expert 模型最终仍不会收到它们。
+- 内联前会校验文件扩展名或 MIME 类型；非文本文件（图片、PDF 等）会被保留但 expert 模型最终仍不会收到它们。此时会记录 `[expert_attachment_dropped]` 告警日志（含文件名/MIME），便于线上确认"PRO 模型看不到附件"的原因是上游模型本身不支持非文本附件；若 `expert_text_file_inline` 被关闭，顶层文件引用同样会打该日志。
 - 单个文件超过 `expert_text_file_inline.max_file_bytes`（默认 `3145728`，即 3 MiB）会直接拒绝请求（HTTP 413）。
 - 用户可通过 `expert_text_file_inline.allowed_extensions` 自定义扩展名白名单；提供后默认 MIME 回退会被禁用，只按扩展名判断。
 - 文件内容统一按 UTF-8 读取，非法字节替换为 `\ufffd`。

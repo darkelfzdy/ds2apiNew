@@ -1,5 +1,10 @@
 package transport
 
+import (
+	"os"
+	"strings"
+)
+
 // ChromeMajorVersion is the Chrome generation advertised at the HTTP layer
 // (User-Agent and sec-ch-ua, both built from it in the protocol package).
 //
@@ -8,7 +13,15 @@ package transport
 // of real users sit within a few versions of latest, so a stale User-Agent is
 // itself an anomaly — and it is the cheapest thing in the world for a server to
 // check.
-const ChromeMajorVersion = "150"
+//
+// 默认值取自抓包（Chrome 150）。可通过环境变量 DS2API_CHROME_MAJOR_VERSION
+// 覆盖，DeepSeek 网页版升级导致需要换 UA 时无需重新编译。
+var ChromeMajorVersion = func() string {
+	if v := strings.TrimSpace(os.Getenv("DS2API_CHROME_MAJOR_VERSION")); v != "" {
+		return v
+	}
+	return "150"
+}()
 
 // TLSChromeVersion is the Chrome generation the TLS ClientHello reproduces.
 //

@@ -37,7 +37,7 @@ const (
 // chromeMajorVersion 直接取自 transport 层，与 uTLS ClientHello 同源，
 // 避免两边各写一份常量后随依赖升级悄悄错开
 // （曾出现 TLS 指纹是 Chrome 133、User-Agent 却自称 128 的矛盾）。
-const chromeMajorVersion = transport.ChromeMajorVersion
+var chromeMajorVersion = transport.ChromeMajorVersion
 
 var chromeUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" + chromeMajorVersion + ".0.0.0 Safari/537.36"
 

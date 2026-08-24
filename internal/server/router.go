@@ -31,7 +31,6 @@ import (
 	"ds2api/internal/httpapi/openai/shared"
 	"ds2api/internal/httpapi/requestbody"
 	"ds2api/internal/mihomo"
-	"ds2api/internal/updatecheck"
 	"ds2api/internal/webui"
 )
 
@@ -41,7 +40,6 @@ type App struct {
 	Resolver *auth.Resolver
 	DS       *dsclient.Client
 	Mihomo   *mihomo.Manager
-	Update   *updatecheck.Checker
 	Router   http.Handler
 }
 
@@ -78,7 +76,6 @@ func NewApp() (*App, error) {
 	ollamaHandler := &ollama.Handler{Store: store}
 	webuiHandler := webui.NewHandler()
 	mihomoMgr := mihomo.NewManager(store, pool)
-	updateChecker := updatecheck.NewChecker()
 	mihomoMgr.SetProxyReset(dsClient.ResetProxyClients)
 	dsClient.SetNodeFailureReporter(mihomoMgr.ReportUpstreamResult)
 	dsClient.SetAccountPoolChanged(mihomoMgr.RequestReconcile)
@@ -141,7 +138,7 @@ func NewApp() (*App, error) {
 	// 配置启用时后台拉起 mihomo 子进程（Vercel 等不支持子进程的环境自动跳过）。
 	mihomoMgr.StartIfEnabled()
 
-	return &App{Store: store, Pool: pool, Resolver: resolver, DS: dsClient, Mihomo: mihomoMgr, Update: updateChecker, Router: r}, nil
+	return &App{Store: store, Pool: pool, Resolver: resolver, DS: dsClient, Mihomo: mihomoMgr, Router: r}, nil
 }
 
 func timeout(d time.Duration) func(http.Handler) http.Handler {

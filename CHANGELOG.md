@@ -1,5 +1,19 @@
 # Changelog
 
+## 4.7.1 (2026-08-26)
+
+### 修复：自定义部署镜像缺少 CA 根证书导致账号登录失败
+
+v4.7.0 若使用自定义 Dockerfile 部署（非仓库自带多阶段构建），基于
+`debian:bookworm-slim` 却遗漏 `ca-certificates` 时，容器内 `/etc/ssl/certs`
+为空，Go 标准库 TLS 校验全部失败（`x509: certificate signed by unknown authority`），
+账号无法登录刷新 token，表现为"账号登录不了"。
+
+- 部署注意事项：自定义部署 Dockerfile 的 `FROM debian:*` 之后必须
+  `RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates`。
+- 验证方法：构建后 `docker run --rm <image> sh -c "ls /etc/ssl/certs/ca-certificates.crt"`。
+- 生产环境 apt 源建议替换为 `mirrors.aliyun.com`，避免 `deb.debian.org` 下载卡死。
+
 ## 4.7.0 (2026-08-26)
 
 ### 新增：Mihomo 节点过滤（mihomo.node_exclude）

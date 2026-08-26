@@ -248,6 +248,8 @@ func (m *Manager) AddSubscription(ctx context.Context, name, rawURL string) (con
 	if err != nil {
 		return config.MihomoSubscription{}, err
 	}
+	// 落库前按 node_exclude 过滤：被排除节点（如风控拉黑地区段）不进入缓存。
+	nodes = config.FilterExcludedNodes(nodes, m.store.Snapshot().Mihomo.NodeExclude)
 	sub := config.MihomoSubscription{
 		ID:        "sub-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:12],
 		Name:      name,
@@ -290,6 +292,8 @@ func (m *Manager) RefreshSubscription(ctx context.Context, subID string) (int, e
 	if err != nil {
 		return 0, err
 	}
+	// 落库前按 node_exclude 过滤（与 AddSubscription 保持一致）。
+	nodes = config.FilterExcludedNodes(nodes, m.store.Snapshot().Mihomo.NodeExclude)
 	if err := m.store.Update(func(c *config.Config) error {
 		for i := range c.Mihomo.Subscriptions {
 			if c.Mihomo.Subscriptions[i].ID != subID {

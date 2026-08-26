@@ -235,11 +235,12 @@ func (c Config) Clone() Config {
 // 节点的 Raw map 解析完成后不再原地修改（总是整体替换），因此共享引用。
 func cloneMihomoConfig(in MihomoConfig) MihomoConfig {
 	out := MihomoConfig{
-		Enabled:    in.Enabled,
-		BinaryPath: in.BinaryPath,
-		BasePort:   in.BasePort,
-		APIPort:    in.APIPort,
-		AutoBind:   in.AutoBind,
+		Enabled:     in.Enabled,
+		BinaryPath:  in.BinaryPath,
+		BasePort:    in.BasePort,
+		APIPort:     in.APIPort,
+		AutoBind:    in.AutoBind,
+		NodeExclude: slices.Clone(in.NodeExclude),
 	}
 	if len(in.Subscriptions) > 0 {
 		out.Subscriptions = make([]MihomoSubscription, len(in.Subscriptions))

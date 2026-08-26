@@ -52,6 +52,12 @@ func loadMihomoSubscriptionsFile(cfg *Config) error {
 	}
 	cfg.Mihomo.Subscriptions = file.Subscriptions
 	cfg.Mihomo.PortMap = file.PortMap
+	// 按 node_exclude 过滤已缓存的订阅节点：即使旧缓存里残留被排除节点
+	// （如手工清洗前的数据），启动后也不会进入节点池。
+	for i := range cfg.Mihomo.Subscriptions {
+		cfg.Mihomo.Subscriptions[i].Nodes = FilterExcludedNodes(
+			cfg.Mihomo.Subscriptions[i].Nodes, cfg.Mihomo.NodeExclude)
+	}
 	return nil
 }
 

@@ -29,6 +29,10 @@ type MihomoConfig struct {
 	APIPort       int                  `json:"api_port,omitempty"`
 	Subscriptions []MihomoSubscription `json:"subscriptions,omitempty"`
 	PortMap       map[string]int       `json:"port_map,omitempty"`
+	// NodeExclude 按节点名关键字排除订阅节点（节点名包含任一关键字即剔除）。
+	// 用于等效"在机场侧下掉"被风控标记的节点（如被 DeepSeek CloudFront 拉黑的
+	// 美国/英国数据中心段），订阅刷新后依然生效，不需要每次手工清洗缓存文件。
+	NodeExclude []string `json:"node_exclude,omitempty"`
 	// AutoBind 开启自动故障转移与弹性号池补位挂载：
 	// 后台巡检定期测速已绑定节点，节点失效时自动把账号切到健康节点，
 	// 新启用（或补位上线的弹性号池账号）且未配置代理的账号自动分配健康节点。
@@ -65,17 +69,19 @@ type MihomoNode struct {
 // 的 subscriptions/port_map 兼容（下次保存时自动迁移）。
 func (m MihomoConfig) MarshalJSON() ([]byte, error) {
 	aux := struct {
-		Enabled    bool   `json:"enabled,omitempty"`
-		BinaryPath string `json:"binary_path,omitempty"`
-		BasePort   int    `json:"base_port,omitempty"`
-		APIPort    int    `json:"api_port,omitempty"`
-		AutoBind   bool   `json:"auto_bind,omitempty"`
+		Enabled     bool     `json:"enabled,omitempty"`
+		BinaryPath  string   `json:"binary_path,omitempty"`
+		BasePort    int      `json:"base_port,omitempty"`
+		APIPort     int      `json:"api_port,omitempty"`
+		AutoBind    bool     `json:"auto_bind,omitempty"`
+		NodeExclude []string `json:"node_exclude,omitempty"`
 	}{
-		Enabled:    m.Enabled,
-		BinaryPath: m.BinaryPath,
-		BasePort:   m.BasePort,
-		APIPort:    m.APIPort,
-		AutoBind:   m.AutoBind,
+		Enabled:     m.Enabled,
+		BinaryPath:  m.BinaryPath,
+		BasePort:    m.BasePort,
+		APIPort:     m.APIPort,
+		AutoBind:    m.AutoBind,
+		NodeExclude: m.NodeExclude,
 	}
 	return json.Marshal(aux)
 }
@@ -84,6 +90,7 @@ func (m MihomoConfig) MarshalJSON() ([]byte, error) {
 // 因此序列化时与零值同等处理。
 func NormalizeMihomoConfig(m MihomoConfig) MihomoConfig {
 	m.BinaryPath = strings.TrimSpace(m.BinaryPath)
+	m.NodeExclude = trimNonEmpty(m.NodeExclude)
 	if m.BasePort <= 0 {
 		m.BasePort = DefaultMihomoBasePort
 	}
@@ -110,7 +117,42 @@ func IsZeroMihomoConfig(m MihomoConfig) bool {
 		(m.BasePort == 0 || m.BasePort == DefaultMihomoBasePort) &&
 		(m.APIPort == 0 || m.APIPort == DefaultMihomoAPIPort) &&
 		len(m.Subscriptions) == 0 &&
-		len(m.PortMap) == 0
+		len(m.PortMap) == 0 &&
+		len(m.NodeExclude) == 0
+}
+
+// trimNonEmpty 去掉切片中的空白项并 trim 每项，保留原顺序。
+func trimNonEmpty(in []string) []string {
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// FilterExcludedNodes 按排除关键字过滤订阅节点：节点名包含任一关键字即剔除。
+// 匹配区分大小写（机场节点名常用 emoji 国旗等精确字符）。
+// 排除列表为空时返回原切片（零拷贝）；否则返回新切片，不改动输入底层数组。
+func FilterExcludedNodes(nodes []MihomoNode, exclude []string) []MihomoNode {
+	if len(exclude) == 0 {
+		return nodes
+	}
+	out := make([]MihomoNode, 0, len(nodes))
+next:
+	for _, n := range nodes {
+		for _, kw := range exclude {
+			if kw == "" {
+				continue
+			}
+			if strings.Contains(n.Name, kw) {
+				continue next
+			}
+		}
+		out = append(out, n)
+	}
+	return out
 }
 
 // MihomoNodeKey 生成节点在 PortMap / 托管代理中的稳定键。

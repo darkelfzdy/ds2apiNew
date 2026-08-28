@@ -123,6 +123,9 @@ export default function useMihomoBridge({ authFetch, onMessage, onConfigChanged,
                 base_port: Number(form.base_port) || 0,
                 api_port: Number(form.api_port) || 0,
                 auto_bind: Boolean(form.auto_bind),
+                node_exclude: Array.isArray(form.node_exclude)
+                    ? form.node_exclude.map(s => String(s).trim()).filter(Boolean)
+                    : [],
             }),
         })
         const data = await readApiResponse(res)

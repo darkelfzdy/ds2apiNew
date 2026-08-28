@@ -4,6 +4,7 @@ package mihomo
 
 import (
 	"context"
+	"fmt"
 
 	"ds2api/internal/config"
 	adminshared "ds2api/internal/httpapi/admin/shared"
@@ -18,7 +19,7 @@ type Bridge interface {
 	AddSubscription(ctx context.Context, name, rawURL string) (config.MihomoSubscription, error)
 	RefreshSubscription(ctx context.Context, subID string) (int, error)
 	DeleteSubscription(ctx context.Context, subID string) error
-	UpdateSettings(ctx context.Context, enabled bool, binaryPath string, basePort, apiPort int, autoBind bool) error
+	UpdateSettings(ctx context.Context, enabled bool, binaryPath string, basePort, apiPort int, autoBind bool, nodeExclude []string) error
 	ListNodes() []map[string]any
 	TestLatency(ctx context.Context) ([]map[string]any, error)
 	AssignAccounts(ctx context.Context, nodeKeys []string) (int, error)
@@ -54,4 +55,25 @@ func fieldInt(m map[string]any, key string) int {
 func fieldBool(m map[string]any, key string) bool {
 	v, _ := m[key].(bool)
 	return v
+}
+
+// fieldStringSlice 读取字符串数组字段：键缺失返回 nil（表示“未提供”，
+// 调用方应保持原值）；键存在但为空数组/null 返回空切片（表示“清空”）。
+func fieldStringSlice(m map[string]any, key string) []string {
+	items, ok := m[key].([]any)
+	if !ok {
+		if _, present := m[key]; present {
+			return []string{}
+		}
+		return nil
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if s, isStr := item.(string); isStr {
+			out = append(out, s)
+			continue
+		}
+		out = append(out, fmt.Sprintf("%v", item))
+	}
+	return out
 }

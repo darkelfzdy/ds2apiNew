@@ -403,6 +403,7 @@ func (m *Manager) Status() map[string]any {
 		"base_port":     cfg.Mihomo.BasePort,
 		"api_port":      cfg.Mihomo.APIPort,
 		"api_addr":      fmt.Sprintf("127.0.0.1:%d", cfg.Mihomo.APIPort),
+		"node_exclude":  append([]string(nil), cfg.Mihomo.NodeExclude...),
 		"started_at":    startedAt.Unix(),
 		"last_error":    lastErr,
 		"listeners":     listeners,

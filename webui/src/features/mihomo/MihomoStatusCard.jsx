@@ -41,7 +41,7 @@ function InfoRow({ label, value, mono = true }) {
 
 export default function MihomoStatusCard({ status, busy, onSaveSettings, onApply, onDownloadBinary }) {
     const { t } = useI18n()
-    const [form, setForm] = useState({ enabled: false, binary_path: '', base_port: 0, api_port: 0, auto_bind: false })
+    const [form, setForm] = useState({ enabled: false, binary_path: '', base_port: 0, api_port: 0, auto_bind: false, node_exclude_text: '' })
 
     useEffect(() => {
         if (!status) return
@@ -51,6 +51,7 @@ export default function MihomoStatusCard({ status, busy, onSaveSettings, onApply
             base_port: status.base_port || 0,
             api_port: status.api_port || 0,
             auto_bind: Boolean(status.auto_bind),
+            node_exclude_text: Array.isArray(status.node_exclude) ? status.node_exclude.join('\n') : '',
         })
     }, [status])
 
@@ -161,9 +162,27 @@ export default function MihomoStatusCard({ status, busy, onSaveSettings, onApply
                         </div>
                     </div>
 
+                    <div>
+                        <label className="block text-sm font-medium mb-1.5">{t('mihomoBridge.nodeExcludeLabel')}</label>
+                        <textarea
+                            rows={3}
+                            className="input-field font-mono"
+                            placeholder={t('mihomoBridge.nodeExcludePlaceholder')}
+                            value={form.node_exclude_text}
+                            onChange={e => setForm({ ...form, node_exclude_text: e.target.value })}
+                        />
+                        <p className="text-xs text-muted-foreground mt-1">{t('mihomoBridge.nodeExcludeHint')}</p>
+                    </div>
+
                     <div className="flex items-center gap-3 pt-1">
                         <button
-                            onClick={() => onSaveSettings(form)}
+                            onClick={() => onSaveSettings({
+                                ...form,
+                                node_exclude: form.node_exclude_text
+                                    .split('\n')
+                                    .map(s => s.trim())
+                                    .filter(Boolean),
+                            })}
                             disabled={saving || !status?.supported}
                             className="px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors text-sm font-medium disabled:opacity-50 flex items-center gap-2"
                         >

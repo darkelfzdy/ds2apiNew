@@ -37,7 +37,7 @@ func (h *Handler) updateSettings(w http.ResponseWriter, r *http.Request) {
 	if v, ok := req["enabled"].(bool); ok {
 		enabled = v
 	}
-	err := b.UpdateSettings(r.Context(), enabled, fieldString(req, "binary_path"), fieldInt(req, "base_port"), fieldInt(req, "api_port"), fieldBool(req, "auto_bind"))
+	err := b.UpdateSettings(r.Context(), enabled, fieldString(req, "binary_path"), fieldInt(req, "base_port"), fieldInt(req, "api_port"), fieldBool(req, "auto_bind"), fieldStringSlice(req, "node_exclude"))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"detail": err.Error()})
 		return

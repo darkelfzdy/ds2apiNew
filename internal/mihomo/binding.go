@@ -355,8 +355,10 @@ func (m *Manager) DeleteSubscription(_ context.Context, subID string) error {
 	return nil
 }
 
-// UpdateSettings 更新桥开关/二进制路径/端口设置/自动调度开关并立即应用。
-func (m *Manager) UpdateSettings(_ context.Context, enabled bool, binaryPath string, basePort, apiPort int, autoBind bool) error {
+// UpdateSettings 更新桥开关/二进制路径/端口设置/自动调度开关/节点排除关键字并立即应用。
+// nodeExclude 语义：nil 表示本次请求未携带该字段（保持原值不变，兼容旧客户端）；
+// 非 nil（含空切片）表示整体替换，空切片即清空排除列表。
+func (m *Manager) UpdateSettings(_ context.Context, enabled bool, binaryPath string, basePort, apiPort int, autoBind bool, nodeExclude []string) error {
 	if m == nil || m.store == nil {
 		return errors.New("mihomo manager 未初始化")
 	}
@@ -373,7 +375,21 @@ func (m *Manager) UpdateSettings(_ context.Context, enabled bool, binaryPath str
 		if apiPort > 0 {
 			c.Mihomo.APIPort = apiPort
 		}
+		if nodeExclude != nil {
+			c.Mihomo.NodeExclude = nodeExclude
+		}
 		c.Mihomo = config.NormalizeMihomoConfig(c.Mihomo)
+		if nodeExclude != nil {
+			// 关键字变化立即生效：按新列表重滤订阅缓存节点，
+			// 再回收失效节点的端口映射与账号绑定。
+			// 注意：被旧关键字过滤掉的节点已从缓存移除，放宽关键字后
+			// 需刷新订阅才能恢复（与落库前过滤语义一致）。
+			for i := range c.Mihomo.Subscriptions {
+				c.Mihomo.Subscriptions[i].Nodes = config.FilterExcludedNodes(
+					c.Mihomo.Subscriptions[i].Nodes, c.Mihomo.NodeExclude)
+			}
+			gcLocked(c)
+		}
 		return validateMutation(c)
 	})
 	if err != nil {

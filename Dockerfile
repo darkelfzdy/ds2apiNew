@@ -12,6 +12,9 @@ WORKDIR /app
 ARG TARGETOS
 ARG TARGETARCH
 ARG BUILD_VERSION
+# 国内构建可传 --build-arg GOPROXY=https://goproxy.cn,direct 走模块代理。
+ARG GOPROXY=
+RUN set -eux; if [ -n "${GOPROXY}" ]; then go env -w GOPROXY="${GOPROXY}"; fi
 COPY go.mod go.sum* ./
 RUN go mod download
 COPY . .
@@ -26,7 +29,8 @@ FROM busybox:1.36.1-musl AS busybox-tools
 
 # 下载与目标架构匹配的 Mihomo 内核（裸 ELF gzip 资产），
 # 使镜像开箱即带代理桥能力，无需用户手动下载。
-# 国内构建可传 --build-arg MIHOMO_MIRROR=https://ghfast.top/ 走加速前缀。
+# 国内构建可传 --build-arg MIHOMO_MIRROR=https://ghfast.top/ 走加速前缀；
+# 传入后优先尝试镜像前缀，失败再回落官方源。
 FROM debian:bookworm-slim AS mihomo-downloader
 ARG MIHOMO_VERSION=v1.19.29
 ARG MIHOMO_MIRROR=
@@ -43,7 +47,7 @@ RUN set -eux; \
     RELEASE_URL="https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VERSION}/${ASSET}"; \
     mkdir -p /out; \
     ok=0; \
-    for url in "${RELEASE_URL}" "${MIHOMO_MIRROR}${RELEASE_URL}"; do \
+    for url in "${MIHOMO_MIRROR}${RELEASE_URL}" "${RELEASE_URL}"; do \
       [ -z "${url}" ] && continue; \
       if curl -fL --retry 3 --connect-timeout 20 -o /tmp/mihomo.gz "${url}"; then ok=1; break; fi; \
     done; \

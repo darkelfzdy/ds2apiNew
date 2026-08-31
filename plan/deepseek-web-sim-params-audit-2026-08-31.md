@@ -2,6 +2,15 @@
 
 > 目的：核对 ds2api 伪装 DeepSeek 网页版所需的**请求头**与**版本号**是否过期，给出可选项，由用户决定是否更新。
 > 本轮**只取证、不改代码**。上次同步：2026-08-25（commit `82f0288`，client version 2.2.0 → 2.4.0，Chrome 150）。
+>
+> **✅ 结果（2026-08-31 已实施）**：用户选定 **B + D**，已落地并发布 **v4.8.0**
+> （commit `c63ebd7` / `4c65cbf`，release https://github.com/t479842598/ds2apiNew/releases/tag/v4.8.0 ）。
+> 实施中额外发现并修掉三个本文未预见的问题：① `DS2API_CHROME_MAJOR_VERSION` 写在 `.env` 里静默失效；
+> ② 非法环境变量值会直接拼出 `Chrome/abc.0.0.0` 坏指纹；③ `scripts/lint.sh` 在含空格路径下
+> 因 `eval` 拆词而根本跑不起来。另外把 Chrome 指纹从“Go/JS 双写”改为
+> `constants_shared.json` 单一来源（方案 B 的强化版）。详见
+> `.lrnev/scenes/00-default/specs/02-00-deepseek-upstream-adapt/` 与笔记
+> `v4.8.0-ds2apiNew-Chrome指纹升级151与上游风控识别`。
 
 ---
 

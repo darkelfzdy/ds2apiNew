@@ -111,3 +111,54 @@ npm run build --prefix webui
 ```
 
 端到端测试产物默认写入 `artifacts/testsuite/`。分享日志前需要清理 token、密码、cookie 和原始请求响应内容。
+
+## 6. DeepSeek 网页版指纹（Chrome 版本）怎么升
+
+伪装参数只有一个权威来源：`internal/deepseek/protocol/constants_shared.json` 的 `chrome` 块。
+Go 侧 `go:embed`、Node/Vercel 侧 `require` 读同一文件，**不要在 `chrome.go` 或
+`deepseek-constants.js` 里另写版本号**（`tests/node/js_compat_test.js` 有守卫用例，会直接测挂）。
+
+优先级：`DS2API_CHROME_MAJOR_VERSION` > JSON 的 `major_version` > 内置回退。
+该变量可以写在 `.env`（v4.8.0 修过“包初始化早于 `LoadDotEnv` 导致 `.env` 不生效”的问题）；
+非法值会被忽略并打 `[chrome] invalid DS2API_CHROME_MAJOR_VERSION ignored` 告警，
+不会拼出 `Chrome/abc.0.0.0` 这种坏指纹。
+
+**升版只需改一个数字**：把 `chrome.major_version` 改成目标大版本即可。`sec-ch-ua` 的
+GREASE 品牌串是 Chrome 大版本的**确定性函数**，由代码按 Chromium 源码公式算出
+（`protocol.ComputeChromeGreaseBrand` / JS `computeChromeGreaseBrand`）：
+
+```
+chars   = {" ", "(", ":", "-", ".", "/", ")", ";", "=", "?", "_"}   // 11 个
+vers    = {"8", "99", "24"}                                            // 3 个
+brand   = "Not" + chars[major % 11] + "A" + chars[(major + 1) % 11] + "Brand"
+version = vers[major % 3]
+```
+
+JSON 里的 `grease_brands` 是**历史钉值兼逃生口**：命中则优先用它（万一 Chromium 轮换算法，
+改 JSON 即可），未命中则自动计算。单测会交叉验证“算法输出 == 钉值”，两边不一致就报错。
+
+TLS/H2 层自动跟随：`transport.ResolveChromePreset()` 取 **≤ 请求版本的最新可用预设**
+（用 `fingerprint.GetStrict` 探测，不用会静默回退到旧预设的 `Get`）。所以目标版本尚无
+httpcloak 预设时，要么先升级 httpcloak，要么直接用新大版本（TLS 会落在最近可用预设，
+不会像旧实现那样“改了 UA 没改 TLS”）。
+
+改完自检：
+
+```bash
+go run ./tests/wire-capture -ours     # 核对 UA / sec-ch-ua / TLS 预设三者版本一致
+```
+
+启动日志会打 `[chrome] web-client fingerprint major=<N> tls_preset=<name>`，部署后用它确认指纹真的切过去了。
+
+## 7. 上游风控拦截与 token 刷新语义
+
+- 拦截识别集中在 `protocol.ClassifyUpstreamBlock()`（Go）与
+  `deepseek-constants.js` 的 `classifyUpstreamBlock()`（Node），两边共用同一张判定表；
+  日志标签与含义见 `docs/MIHOMO_BRIDGE.md` 的「上游风控拦截分类」。
+- 命中拦截归 `FailureUpstreamBlocked`，**不触发 token 刷新**，对调用方返回 502。
+- `auth.RefreshToken()` **不再“先删再试”**：登录用的是账号密码，不依赖旧 token，
+  提前清空对登录本身无帮助；而登录因出口被拦/网络抖动失败时，我们并没有从上游得
+  到任何关于旧 token 的结论，因此保留它（避免无谓重登——登录是风控最敏感的一步）。
+  只有登录确实被上游拒绝时才清 token（`MarkTokenInvalid`）。
+- 注意 token **不写盘**（`writeConfigJSONLocked` 会 `ClearAccountTokens`），只存进程内存；
+  token 为空时 `ensureManagedToken` 会在下一次请求自动重新登录，所以保留失败不会把账号打死。

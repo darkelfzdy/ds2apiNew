@@ -5,9 +5,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"ds2api/internal/account"
@@ -209,13 +213,63 @@ func (r *Resolver) RefreshToken(ctx context.Context, a *RequestAuth) bool {
 	if !a.UseConfigToken || a.AccountID == "" {
 		return false
 	}
-	_ = r.Store.UpdateAccountToken(a.AccountID, "")
-	a.Account.Token = ""
+	// 旧实现一进函数就把 token 清空再去登录，等于“先删再试”。
+	// 但登录用的是账号密码，不依赖旧 token，提前清空对登录本身没有任何帮助；
+	// 而一旦登录因出口被拦/网络抖动失败，我们就在“对旧 token 一无所知”的情况下
+	// 把它扔了：下次请求必须重新走登录，而登录恰是风控最敏感的一步。
+	// （token 不写盘，且 token 为空时 ensureManagedToken 会在下次请求自动重登，
+	// 所以这不是把账号打死，而是多付一次重登代价与额外的风控暴露。）
+	previousToken := strings.TrimSpace(a.Account.Token)
 	if err := r.loginAndPersist(ctx, a); err != nil {
 		config.Logger.Error("[refresh_token] failed", "account", a.AccountID, "error", err)
+		if transientRefreshFailure(err) {
+			// 这次失败没带来任何关于旧 token 的新信息，保留它。
+			config.Logger.Warn("[refresh_token] transient failure, kept existing token",
+				"account", a.AccountID, "kept", strings.TrimSpace(previousToken) != "")
+			a.Account.Token = previousToken
+			return false
+		}
+		// 登录确实被上游拒绝：旧 token 已无价值，按原行为清掉，
+		// 避免后续请求拿着它反复撞 401。
+		r.MarkTokenInvalid(a)
 		return false
 	}
 	return true
+}
+
+// upstreamBlockedMarker 由 client.RequestFailure 结构性实现（避免 auth 反向 import client）。
+type upstreamBlockedMarker interface {
+	UpstreamBlocked() bool
+}
+
+// transientRefreshFailure 判断一次登录失败是否“只说明链路不通、不说明凭据失效”。
+// 这类失败下保留旧 token 才是对的：我们并没有从上游得到任何关于它的结论。
+func transientRefreshFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	var marker upstreamBlockedMarker
+	if errors.As(err, &marker) && marker.UpstreamBlocked() {
+		return true
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	// 没有 HTTP 响应可谈：连不上、TLS 握手失败、连接被重置、EOF。
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNABORTED) ||
+		errors.Is(err, syscall.EHOSTUNREACH) || errors.Is(err, syscall.ENETUNREACH) {
+		return true
+	}
+	return false
 }
 
 func (r *Resolver) MarkTokenInvalid(a *RequestAuth) {

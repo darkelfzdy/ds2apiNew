@@ -60,3 +60,9 @@ func IsUpstreamBlockedError(err error) bool {
 	var failure *RequestFailure
 	return errors.As(err, &failure) && failure.Kind == FailureUpstreamBlocked
 }
+
+// UpstreamBlocked 实现 auth 包里那个同名方法的局部接口，用于跨包判断“是否只是出口被拦”。
+// 依赖方向是 client -> auth，auth 不能反过来 import client，所以用结构性接口解耦。
+func (e *RequestFailure) UpstreamBlocked() bool {
+	return e != nil && e.Kind == FailureUpstreamBlocked
+}

@@ -48,6 +48,39 @@ function normalizeChromeMajor(raw) {
   return value;
 }
 
+// GREASE 品牌串是 Chrome 大版本的确定性函数，公式取自 Chromium 源码
+// components/embedder_support/user_agent_utils.cc::GetGreasedUserAgentBrandVersion，
+// 与 Go 侧 protocol.ComputeChromeGreaseBrand 逐字一致：
+//   brand   = "Not" + chars[major % 11] + "A" + chars[(major + 1) % 11] + "Brand"
+//   version = versions[major % 3]
+const CHROME_GREASE_CHARS = Object.freeze([' ', '(', ':', '-', '.', '/', ')', ';', '=', '?', '_']);
+const CHROME_GREASE_VERSIONS = Object.freeze(['8', '99', '24']);
+
+function computeChromeGreaseBrand(major) {
+  const n = Number(major);
+  if (!Number.isInteger(n) || n <= 0) {
+    return null;
+  }
+  const brand = 'Not' + CHROME_GREASE_CHARS[n % CHROME_GREASE_CHARS.length] +
+    'A' + CHROME_GREASE_CHARS[(n + 1) % CHROME_GREASE_CHARS.length] + 'Brand';
+  const version = CHROME_GREASE_VERSIONS[n % CHROME_GREASE_VERSIONS.length];
+  return JSON.stringify(brand) + ';v=' + JSON.stringify(version);
+}
+
+// 与 Go 侧同一优先级：JSON 钉值（逃生口）> 算法计算 > 回退最新已知。
+function resolveChromeGreaseBrand(major, brands, fallbackMajor) {
+  const pinned = brands[String(major)];
+  if (typeof pinned === 'string' && pinned.trim() !== '') {
+    return pinned;
+  }
+  const computed = computeChromeGreaseBrand(major);
+  if (computed) {
+    return computed;
+  }
+  return brands[String(fallbackMajor)] || computeChromeGreaseBrand(fallbackMajor) ||
+    computeChromeGreaseBrand(BUILTIN_CHROME.majorVersion);
+}
+
 function resolveChromeContract() {
   let parsed = {};
   try {
@@ -69,8 +102,8 @@ function resolveChromeContract() {
   const jsonMajor = normalizeChromeMajor(chrome.major_version) || BUILTIN_CHROME.majorVersion;
   const majorVersion = envMajor || jsonMajor;
   const fallbackMajor = String(chrome.grease_fallback_major || BUILTIN_CHROME.greaseFallbackMajor);
-  // GREASE 品牌串随大版本轮换；未知版本回退最新已知值（比用旧值更接近真实）。
-  const greaseBrand = brands[majorVersion] || brands[fallbackMajor] || BUILTIN_CHROME.greaseBrands['151'];
+  // GREASE 串：钉值优先，否则按 Chromium 算法计算（升版不再需要手补表）。
+  const greaseBrand = resolveChromeGreaseBrand(majorVersion, brands, fallbackMajor);
   return { majorVersion, greaseBrand };
 }
 
@@ -308,6 +341,7 @@ module.exports = {
   CLIENT: Object.freeze({ ...shared.client }),
   CLIENT_VERSION: shared.client.version,
   CHROME_MAJOR_VERSION,
+  computeChromeGreaseBrand,
   classifyUpstreamBlock,
   BASE_HEADERS: Object.freeze(shared.baseHeaders),
   SKIP_PATTERNS: Object.freeze(shared.skipPatterns),

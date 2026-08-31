@@ -96,6 +96,24 @@ test('js classifyUpstreamBlock matches the Go classification table', () => {
   assert.equal(classifyUpstreamBlock(403, null), null);
 });
 
+// GREASE 串由 Chromium 源码公式计算（与 Go 侧 protocol.ComputeChromeGreaseBrand 同一公式）。
+// 本用例把公式输出与已实测/已钉值历史交叉比对：不一致即公式移植错。
+test('js computeChromeGreaseBrand reproduces pinned history and matches Go formula', () => {
+  const { computeChromeGreaseBrand } = deepseekConstants;
+  const shared = readJSON(path.resolve(__dirname, '../../internal/deepseek/protocol/constants_shared.json'));
+  const pinned = (shared.chrome && shared.chrome.grease_brands) || {};
+  assert.ok(Object.keys(pinned).length >= 3, 'expected pinned GREASE history in the contract');
+  for (const [major, want] of Object.entries(pinned)) {
+    assert.equal(computeChromeGreaseBrand(major), want, `algorithm disagrees with pinned value for ${major}`);
+  }
+  // 未钉住的新版本应能算出（升版不需手补表）。
+  assert.equal(computeChromeGreaseBrand('153'), '"Not_A Brand";v="8"');
+  assert.equal(computeChromeGreaseBrand('149'), '"Not)A;Brand";v="24"');
+  for (const bad of ['', 'abc', '0', '-1', null, undefined]) {
+    assert.equal(computeChromeGreaseBrand(bad), null, `${JSON.stringify(bad)} must be rejected`);
+  }
+});
+
 test('js compat: sse fixtures', () => {
   const fixtureDir = path.join(compatRoot, 'fixtures', 'sse_chunks');
   const expectedDir = path.join(compatRoot, 'expected');

@@ -35,28 +35,66 @@ const (
 )
 
 // Chrome 指纹的唯一权威来源是本包内嵌的 constants_shared.json（chrome 块），
-// Go 与 Node/Vercel 两侧读同一文件；transport 只接收推送值，不再各自写死。
-// 下面的内置表仅在 JSON 缺失/不完整时兑底，内容取自真实 Chrome 抓包。
+// Go 与 Node/Vercel 两侧读同一文件；transport 只接收推送值，不重复维护版本号。
+//
+// GREASE 品牌串不再靠手维护：它是 Chrome 大版本的**确定性函数**，
+// 公式直接取自 Chromium 源码
+// components/embedder_support/user_agent_utils.cc::GetGreasedUserAgentBrandVersion：
+//
+//	chars   = {" ", "(", ":", "-", ".", "/", ")", ";", "=", "?", "_"}   // 11 个
+//	vers    = {"8", "99", "24"}                                            // 3 个
+//	brand   = "Not" + chars[seed%11] + "A" + chars[(seed+1)%11] + "Brand"
+//	version = vers[seed%3]            // seed = Chrome 大版本号
+//
+// 同一文件里的 ShuffleBrandList(seed) 也证实了品牌「顺序」是按 seed 洗牌的，
+// 与本项目 2026-08-31 用真实 Chrome 152 的实测一致（顺序不是指纹信号）。
+var chromeGreaseChars = []string{" ", "(", ":", "-", ".", "/", ")", ";", "=", "?", "_"}
+var chromeGreaseVersions = []string{"8", "99", "24"}
+
+// chromeGreaseBrands 现在是**历史钉值/逃生口**而不是唯一来源：
+// 命中则优先用（万一 Chromium 轮换算法，运维改 JSON 即可），
+// 未命中则由 ComputeChromeGreaseBrand 算出来——因此把 major_version
+// 提到一个表里没有的新版本，不再需要人工补 GREASE 串。
 var chromeGreaseBrands = map[string]string{
 	"150": "\"Not;A=Brand\";v=\"8\"",
 	"151": "\"Not=A?Brand\";v=\"99\"",
 	"152": "\"Not?A_Brand\";v=\"24\"",
 }
 
-// chromeGreaseFallbackMajor 是查表未命中时的回退大版本（最新已知）。
-// GREASE 品牌串随 Chrome 大版本轮换，未知版本用最新已知值比用旧值更接近真实。
+// chromeGreaseFallbackMajor 是版本号无法解析时的回退大版本（最新已知）。
 var chromeGreaseFallbackMajor = "152"
 
-// ChromeGreaseBrand 返回当前生效 Chrome 大版本对应的 sec-ch-ua GREASE 品牌串。
+// ComputeChromeGreaseBrand 按 Chromium 算法计算给定大版本的 sec-ch-ua GREASE 串。
+// 第二个返回值为 false 表示 major 不是可用版本号。
+func ComputeChromeGreaseBrand(major string) (string, bool) {
+	n, err := strconv.Atoi(strings.TrimSpace(major))
+	if err != nil || n <= 0 {
+		return "", false
+	}
+	brand := "Not" +
+		chromeGreaseChars[n%len(chromeGreaseChars)] +
+		"A" +
+		chromeGreaseChars[(n+1)%len(chromeGreaseChars)] +
+		"Brand"
+	version := chromeGreaseVersions[n%len(chromeGreaseVersions)]
+	return fmt.Sprintf("%q;v=%q", brand, version), true
+}
+
+// ChromeGreaseBrand 返回当前生效 Chrome 大版本对应的 GREASE 品牌串：
+// 先看 JSON 钉值（逃生口），否则按算法计算；连版本号都解析不了时回退最新已知。
 func ChromeGreaseBrand() string {
 	major := transport.ChromeMajorVersion()
 	if b, ok := chromeGreaseBrands[major]; ok {
 		return b
 	}
+	if b, ok := ComputeChromeGreaseBrand(major); ok {
+		return b
+	}
 	if b, ok := chromeGreaseBrands[chromeGreaseFallbackMajor]; ok {
 		return b
 	}
-	return chromeGreaseBrands["151"]
+	b, _ := ComputeChromeGreaseBrand(chromeGreaseFallbackMajor)
+	return b
 }
 
 // chromeUserAgent 每次调用都从当前生效版本推导，因此环境变量/JSON

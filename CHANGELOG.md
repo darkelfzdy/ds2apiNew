@@ -1,5 +1,59 @@
 # Changelog
 
+## 4.8.1 (2026-08-31)
+
+### 变更：GREASE 品牌串改为按 Chromium 算法计算，升 Chrome 版本不再需要手维护表
+
+**背景/为什么做**：4.8.0 把 Chrome 指纹统一到 151 时，`sec-ch-ua` 的 GREASE 品牌串靠
+`grease_brands` 手维护表提供，其中 151 的值只有两个二手来源（HtmlUnit 硬编码 +
+第三方抓包库），当时在发布说明里标为“未本机实测”。本次从 Chromium 源码找到了它的
+生成规则，彻底消除这个不确定项。
+
+**更新了什么**：
+
+- 源码依据：`components/embedder_support/user_agent_utils.cc::GetGreasedUserAgentBrandVersion`，
+  品牌串是 Chrome 大版本的**确定性函数**：
+  `chars = {" ","(",":","-",".","/",")",";","=","?","_"}`、`vers = {"8","99","24"}`，
+  `brand = "Not" + chars[major%11] + "A" + chars[(major+1)%11] + "Brand"`，`version = vers[major%3]`。
+  同一文件里的 `ShuffleBrandList(list, seed)` 也从源码层面证实了品牌顺序按 seed 洗牌（不是指纹信号）。
+- 新增 `protocol.ComputeChromeGreaseBrand()`（Go）与 `computeChromeGreaseBrand()`（JS），
+  两侧共用同一公式。实测与推导互证：150→`"Not;A=Brand";v="8"`、151→`"Not=A?Brand";v="99"`、
+  152→`"Not?A_Brand";v="24"`（152 与本机真实 Chrome 152.0.7977.65 抓包逐字一致）。
+- `constants_shared.json` 的 `chrome.grease_brands` 降级为**历史钉值兼逃生口**：命中则优先用
+  （万一 Chromium 轮换算法，改 JSON 即可），未命中则自动计算。今后把 `major_version` 提到
+  新版本（如 153/154）**不再需要人工补 GREASE 串**。
+- 新增回归用例：`TestComputeChromeGreaseBrandMatchesPinnedHistory`（算法输出必须逐字复现钉值）、
+  `TestComputeChromeGreaseBrandFutureVersions`（固定 149/153/154/155 的输出）、
+  Node 侧同名交叉用例。
+
+### 修复：`RefreshToken` 不再“先删再试”，避免瞬时故障抹掉可能仍有效的 token
+
+**背景**：旧实现一进 `RefreshToken` 就 `UpdateAccountToken(accountID, "")` 清空旧 token 再去登录。
+但登录用的是账号密码、**不依赖旧 token**，提前清空对登录本身无帮助；一旦登录因出口被拦
+（AWS WAF / Cloudflare challenge）或网络抖动失败，一个本来可能仍有效的 token 就没了，
+下次请求必须重新走登录——而登录恰是风控最敏感的一步（参见 2026-08-26 那轮封号排查）。
+
+**更新了什么**：
+
+- 先登录、后决策：失败时由 `transientRefreshFailure(err)` 判断性质——
+  上游拦截（`FailureUpstreamBlocked`，通过结构性接口识别，避开 `auth` 反向 import `client` 的循环）、
+  `context` 取消/超时、`*url.Error`、`net.Error`、`io.EOF`、连接重置等“没拿到 HTTP 响应”的失败
+  → **保留旧 token**；登录确实被上游拒绝（密码错、`USER_IS_BANNED` 等）→ 仍按原行为
+  走 `MarkTokenInvalid` 清空。
+- 新增 `internal/auth/refresh_token_test.go`：覆盖分类表、拦截/网络失败保留 token、
+  被拒仍清空、成功写入新 token 四类；并用“先播种再验”的夹具用例防止断言空转。
+  已做变异检验：把旧的提前清空改回去，两个“保留”用例如期失败。
+- 文档：`docs/DEVELOPMENT.md` 新增第 6/7 节，写清“Chrome 版本怎么升”与拦截/token 刷新语义。
+
+**验证**：gofmt / lint（0 issues）/ refactor-gate / Go 全量单测 + Node 163 项 / WebUI 构建全部通过；
+`go build` 在 darwin / linux / windows 三个 GOOS 均通过（`transientRefreshFailure` 用到的
+`syscall` 错误码在 Windows 上同样可用）。
+
+**诚实说明**：本修复的实际严重性低于 4.8.0 发布时的描述——token 本来就不写盘（
+`writeConfigJSONLocked` 会 `ClearAccountTokens`），且 token 为空时 `ensureManagedToken` 会在
+下一次请求自动重新登录，所以不会把账号打死。收益是：避免在瞬时故障下丢掉仍有效的 token、
+避免多余的重新登录（降低风控暴露），以及去掉每次刷新的一次多余配置写入。
+
 ## 4.8.0 (2026-08-31)
 
 ### 新增：Chrome 指纹统一升级到 151（TLS 与 HTTP 层同源）+ 上游风控拦截识别

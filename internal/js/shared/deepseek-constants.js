@@ -233,6 +233,34 @@ function buildBaseHeaders(parsed, client) {
   return baseHeaders;
 }
 
+// 上游风控拦截分类：与 Go 侧 internal/deepseek/protocol/upstream_block.go 同一规则，
+// 判定依据全部是「响应状态码 + 响应头」（取自官方前端 main.js commitId 2335d6b）。
+// 命中时返回带 logTag 的分类，供调用方打独立告警标签并与账号异常区分；
+// 普通 401/403/429（无对应响应头）返回 null，不影响既有处理。
+const UPSTREAM_BLOCK_KINDS = Object.freeze({
+  waf_captcha: { logTag: '[upstream_waf_captcha]', status: 405, header: 'x-amzn-waf-action', expected: 'captcha' },
+  waf_challenge: { logTag: '[upstream_waf_challenge]', status: 202, header: 'x-amzn-waf-action', expected: 'challenge' },
+});
+
+function classifyUpstreamBlock(status, headers) {
+  const code = Number(status) || 0;
+  const get = (name) => {
+    if (!headers) return '';
+    if (typeof headers.get === 'function') return String(headers.get(name) || '');
+    return String(headers[name.toLowerCase()] || headers[name] || '');
+  };
+  const wafAction = get('x-amzn-waf-action').trim().toLowerCase();
+  for (const [kind, rule] of Object.entries(UPSTREAM_BLOCK_KINDS)) {
+    if (code === rule.status && wafAction === rule.expected) {
+      return { kind, logTag: rule.logTag, wafAction, cfMitigated: '' };
+    }
+  }
+  if ((code === 403 || code === 429) && get('cf-mitigated').trim().toLowerCase() === 'challenge') {
+    return { kind: 'cf_challenge', logTag: '[upstream_cf_challenge]', wafAction, cfMitigated: 'challenge' };
+  }
+  return null;
+}
+
 function sharedConstantsPaths() {
   return [
     path.resolve(__dirname, '../../deepseek/protocol/constants_shared.json'),
@@ -280,6 +308,7 @@ module.exports = {
   CLIENT: Object.freeze({ ...shared.client }),
   CLIENT_VERSION: shared.client.version,
   CHROME_MAJOR_VERSION,
+  classifyUpstreamBlock,
   BASE_HEADERS: Object.freeze(shared.baseHeaders),
   SKIP_PATTERNS: Object.freeze(shared.skipPatterns),
   SKIP_EXACT_PATHS: new Set(shared.skipExactPaths),

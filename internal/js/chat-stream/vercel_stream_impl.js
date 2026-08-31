@@ -9,7 +9,7 @@ const {
   parseStandaloneToolCalls,
   formatOpenAIStreamToolCalls,
 } = require('../helpers/stream-tool-sieve');
-const { BASE_HEADERS } = require('../shared/deepseek-constants');
+const { BASE_HEADERS, classifyUpstreamBlock } = require('../shared/deepseek-constants');
 const { writeOpenAIError, writeOpenAIErrorWithCode, openAIErrorType } = require('./error_shape');
 const { parseChunkForContent, isCitation } = require('./sse_parse');
 const { buildUsage } = require('./token_usage');
@@ -215,6 +215,19 @@ async function handleVercelStream(req, res, rawBody, payload) {
     if (!completionRes.ok || !completionRes.body) {
       const detail = completionRes.body ? await completionRes.text() : '';
       const status = completionRes.ok ? 500 : completionRes.status || 500;
+      // 上游风控挑战（AWS WAF / Cloudflare）拦的是出口 IP，不是账号也不是调用方 token：
+      // 打独立标签并改用 502，避免客户端拿着 403 去重新登录。其余非 2xx 行为不变。
+      const blocked = classifyUpstreamBlock(completionRes.status, completionRes.headers);
+      if (blocked) {
+        console.warn(`${blocked.logTag} upstream risk-control challenge detected`, JSON.stringify({
+          kind: blocked.kind,
+          status: completionRes.status,
+          waf_action: blocked.wafAction,
+          cf_mitigated: blocked.cfMitigated,
+        }));
+        writeOpenAIErrorWithCode(res, 502, 'Upstream risk control blocked this egress (WAF/Cloudflare challenge). Switch proxy node or exclude blocked regions.', 'upstream_blocked');
+        return;
+      }
       writeOpenAIError(res, status, detail);
       return;
     }

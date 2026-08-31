@@ -40,6 +40,11 @@ GREASE 品牌串。同时 DeepSeek 风控已接入 AWS WAF + Cloudflare challeng
   处置方向改为换出口节点/避开被拉黑地区段（配合 `mihomo.node_exclude`）。
 - **流式 completion 不再把挑战页当 SSE 解析**：`CallCompletion` 遇到已识别的挑战响应直接
   返回 `FailureUpstreamBlocked`（其他非 200 行为完全不变）。
+- **Vercel/Node 路径同步接入**（遵守“新特性需确认 Vercel 路径已连通”的仓库约定）：
+  `internal/js/shared/deepseek-constants.js` 导出与 Go 侧同一张判定表的
+  `classifyUpstreamBlock(status, headers)`；`vercel_stream_impl.js` 在 completion 非 2xx 分支
+  打同样的 `[upstream_*]` 日志标签，并在命中挑战时返回 502（`upstream_blocked`），
+  其余非 2xx 仍按原样透传上游状态码。Node 用例与 Go 用例共用同一张表，两边判定不会错开。
 - **启动日志可观测**：新增 `[chrome] web-client fingerprint` 行，打印生效的 Chrome 大版本与
   实际 TLS 预设名，部署后一眼确认指纹是否真的切过去了。
 
@@ -58,7 +63,7 @@ GREASE 品牌串。同时 DeepSeek 风控已接入 AWS WAF + Cloudflare challeng
 `appVersion:"2.4.0"`，Android App 的 2.4.3 与 web 头无关）、`x-client-*` 头集合无新增必需项、
 PoW 字段与算法一致、继续不发设备级头 `x-hif-dliq`/`x-hif-leim`。
 
-**验证**：gofmt / lint（0 issues）/ refactor-gate / Go 全量单测 + Node 161 项 / WebUI 构建全部通过；
+**验证**：gofmt / lint（0 issues）/ refactor-gate / Go 全量单测 + Node 162 项 / WebUI 构建全部通过；
 `tests/wire-capture -ours` 核对 151/150/152/非法 四种取值的 UA、sec-ch-ua 与 TLS 预设均自洽。
 **真实环环境实测**（非合成用例）：
 

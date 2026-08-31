@@ -63,6 +63,39 @@ test('js shared constants derive Chrome fingerprint from shared json', () => {
   assert.equal(deepseekConstants.BASE_HEADERS['User-Agent'], deepseekConstants.CHROME_USER_AGENT);
 });
 
+// 与 Go 侧 protocol/upstream_block_test.go 同一张判定表：两边必须一致。
+test('js classifyUpstreamBlock matches the Go classification table', () => {
+  const { classifyUpstreamBlock } = deepseekConstants;
+  const headersOf = (obj) => ({ get: (name) => obj[String(name).toLowerCase()] || null });
+
+  const hits = [
+    [405, { 'x-amzn-waf-action': 'captcha' }, 'waf_captcha', '[upstream_waf_captcha]'],
+    [202, { 'x-amzn-waf-action': 'challenge' }, 'waf_challenge', '[upstream_waf_challenge]'],
+    [403, { 'cf-mitigated': 'challenge' }, 'cf_challenge', '[upstream_cf_challenge]'],
+    [429, { 'cf-mitigated': 'challenge' }, 'cf_challenge', '[upstream_cf_challenge]'],
+  ];
+  for (const [status, headers, kind, logTag] of hits) {
+    const got = classifyUpstreamBlock(status, headersOf(headers));
+    assert.ok(got, `status=${status} ${JSON.stringify(headers)} should be classified`);
+    assert.equal(got.kind, kind);
+    assert.equal(got.logTag, logTag);
+  }
+
+  const misses = [
+    [401, {}],
+    [403, {}],
+    [429, {}],
+    [403, { 'cf-mitigated': 'managed' }],
+    [405, { 'x-amzn-waf-action': 'challenge' }],
+    [202, {}],
+    [200, { 'x-amzn-waf-action': 'captcha' }],
+  ];
+  for (const [status, headers] of misses) {
+    assert.equal(classifyUpstreamBlock(status, headersOf(headers)), null, `status=${status} ${JSON.stringify(headers)} must not be classified`);
+  }
+  assert.equal(classifyUpstreamBlock(403, null), null);
+});
+
 test('js compat: sse fixtures', () => {
   const fixtureDir = path.join(compatRoot, 'fixtures', 'sse_chunks');
   const expectedDir = path.join(compatRoot, 'expected');

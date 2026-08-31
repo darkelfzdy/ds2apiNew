@@ -34,8 +34,19 @@ FROM busybox:1.36.1-musl AS busybox-tools
 FROM debian:bookworm-slim AS mihomo-downloader
 ARG MIHOMO_VERSION=v1.19.29
 ARG MIHOMO_MIRROR=
+# 国内构建可传 --build-arg APT_MIRROR=http://mirrors.aliyun.com 避开
+# deb.debian.org 卡死（一次 apt-get update 能耗掉二十多分钟）。
+# 注意：必须用 **http** 而非 https——这两个阶段正要安装 ca-certificates，
+# 镜像里还没有 CA 根证书库，https 源会因 TLS 校验失败而拿不到包列表
+# （表现为“Package ca-certificates is not available”）。
+ARG APT_MIRROR=
 ARG TARGETARCH
 RUN set -eux; \
+    if [ -n "${APT_MIRROR}" ]; then \
+      for f in /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources; do \
+        [ -f "${f}" ] && sed -i "s|http://deb.debian.org/debian|${APT_MIRROR}/debian|g; s|http://security.debian.org/debian-security|${APT_MIRROR}/debian-security|g" "${f}" || true; \
+      done; \
+    fi; \
     apt-get update; \
     apt-get install -y --no-install-recommends curl ca-certificates gzip; \
     rm -rf /var/lib/apt/lists/*; \
@@ -58,10 +69,17 @@ RUN set -eux; \
 
 FROM debian:bookworm-slim AS runtime-base
 WORKDIR /app
+ARG APT_MIRROR=
 # 必须安装 CA 根证书：否则容器内拉取 HTTPS 机场订阅会报
 # x509: certificate signed by unknown authority。
 # update-ca-certificates 确保系统根证书库就绪（含内网/企业自建 CA 追加场景）。
-RUN apt-get update \
+RUN set -eux; \
+    if [ -n "${APT_MIRROR}" ]; then \
+      for f in /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources; do \
+        [ -f "${f}" ] && sed -i "s|http://deb.debian.org/debian|${APT_MIRROR}/debian|g; s|http://security.debian.org/debian-security|${APT_MIRROR}/debian-security|g" "${f}" || true; \
+      done; \
+    fi; \
+    apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && update-ca-certificates \

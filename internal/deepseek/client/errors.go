@@ -13,6 +13,10 @@ const (
 	FailureManagedUnauthorized FailureKind = "managed_unauthorized"
 	FailureCaptchaRequired     FailureKind = "captcha_required"
 	FailureMuted               FailureKind = "account_muted"
+	// FailureUpstreamBlocked 表示上游风控层（AWS WAF / Cloudflare challenge）
+	// 拦截了请求——是「出口 IP / 指纹被拦」，与账号本身的状态无关，
+	// 不应触发 token 刷新，也不应归类为账号封禁。
+	FailureUpstreamBlocked FailureKind = "upstream_blocked"
 )
 
 type RequestFailure struct {
@@ -50,4 +54,9 @@ func IsDirectUnauthorizedError(err error) bool {
 func IsMutedError(err error) bool {
 	var failure *RequestFailure
 	return errors.As(err, &failure) && failure.Kind == FailureMuted
+}
+
+func IsUpstreamBlockedError(err error) bool {
+	var failure *RequestFailure
+	return errors.As(err, &failure) && failure.Kind == FailureUpstreamBlocked
 }

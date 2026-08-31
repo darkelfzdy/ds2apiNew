@@ -18,12 +18,67 @@ const DEFAULT_BASE_HEADERS = Object.freeze({
   'x-client-bundle-id': 'com.deepseek.chat',
 });
 
-// 必须与 Go 侧 internal/deepseek/transport.ChromeMajorVersion 一致。
+// ---- Chrome 指纹 ----
+// 唯一权威来源是 Go 侧内嵌的 constants_shared.json（chrome 块）：本文件与
+// internal/deepseek/protocol 读同一文件，从机制上消除“两边各写一份 UA 常量
+// 然后悄悄错开”的漂移。下面的内置值只在 JSON 缺失/不完整时兑底。
 // 注意：Node 路径（Vercel）走原生 fetch，拿不到 uTLS，TLS/HTTP2 指纹无法伪装，
 // 这里只能保证 HTTP 头自洽。详见 docs/DEPLOY.md 的风险说明。
-const CHROME_MAJOR_VERSION = '150';
+const BUILTIN_CHROME = Object.freeze({
+  majorVersion: '151',
+  greaseFallbackMajor: '152',
+  greaseBrands: {
+    '150': '"Not;A=Brand";v="8"',
+    '151': '"Not=A?Brand";v="99"',
+    '152': '"Not?A_Brand";v="24"',
+  },
+});
+
+// 与 Go 侧 transport.readEnvChromeMajorVersion 同一规则：非法值必须忽略，
+// 拼进 UA 的垃圾值会造出 Chrome/abc.0.0.0 这种没人用的坏指纹。
+function normalizeChromeMajor(raw) {
+  const value = String(raw == null ? '' : raw).trim();
+  if (value === '' || !/^\d+$/.test(value)) {
+    return '';
+  }
+  const major = Number(value);
+  if (!Number.isFinite(major) || major < 133 || major > 999) {
+    return '';
+  }
+  return value;
+}
+
+function resolveChromeContract() {
+  let parsed = {};
+  try {
+    parsed = readSharedConstants() || {};
+  } catch (_err) {
+    parsed = {};
+  }
+  const chrome = parsed.chrome || {};
+  const brands = { ...BUILTIN_CHROME.greaseBrands };
+  if (chrome.grease_brands && typeof chrome.grease_brands === 'object') {
+    for (const [major, brand] of Object.entries(chrome.grease_brands)) {
+      if (typeof brand === 'string' && brand.trim() !== '') {
+        brands[String(major)] = brand;
+      }
+    }
+  }
+  // 环境变量永远优先，与 Go 侧 transport 保持同一优先级规则。
+  const envMajor = normalizeChromeMajor(process.env.DS2API_CHROME_MAJOR_VERSION);
+  const jsonMajor = normalizeChromeMajor(chrome.major_version) || BUILTIN_CHROME.majorVersion;
+  const majorVersion = envMajor || jsonMajor;
+  const fallbackMajor = String(chrome.grease_fallback_major || BUILTIN_CHROME.greaseFallbackMajor);
+  // GREASE 品牌串随大版本轮换；未知版本回退最新已知值（比用旧值更接近真实）。
+  const greaseBrand = brands[majorVersion] || brands[fallbackMajor] || BUILTIN_CHROME.greaseBrands['151'];
+  return { majorVersion, greaseBrand };
+}
+
+const CHROME_CONTRACT = resolveChromeContract();
+const CHROME_MAJOR_VERSION = CHROME_CONTRACT.majorVersion;
 const CHROME_USER_AGENT = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${CHROME_MAJOR_VERSION}.0.0.0 Safari/537.36`;
-const CHROME_SEC_CH_UA = `"Not;A=Brand";v="8", "Chromium";v="${CHROME_MAJOR_VERSION}", "Google Chrome";v="${CHROME_MAJOR_VERSION}"`;
+// 品牌「顺序」每次安装/会话随机、不是指纹信号，顺序沿用此模板不换。
+const CHROME_SEC_CH_UA = `${CHROME_CONTRACT.greaseBrand}, "Chromium";v="${CHROME_MAJOR_VERSION}", "Google Chrome";v="${CHROME_MAJOR_VERSION}"`;
 
 const WEB_BROWSER_HEADERS = Object.freeze({
   'User-Agent': CHROME_USER_AGENT,
@@ -224,6 +279,7 @@ const shared = loadSharedConstants();
 module.exports = {
   CLIENT: Object.freeze({ ...shared.client }),
   CLIENT_VERSION: shared.client.version,
+  CHROME_MAJOR_VERSION,
   BASE_HEADERS: Object.freeze(shared.baseHeaders),
   SKIP_PATTERNS: Object.freeze(shared.skipPatterns),
   SKIP_EXACT_PATHS: new Set(shared.skipExactPaths),

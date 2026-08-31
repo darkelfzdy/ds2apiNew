@@ -121,6 +121,13 @@ func ExecuteStreamWithRetry(ctx context.Context, ds DeepSeekCaller, a *auth.Requ
 		retryPayload := shared.ClonePayloadForEmptyOutputRetry(currentPayload, parentMessageID)
 		nextResp, err := ds.CallCompletion(ctx, a, retryPayload, retryPow, maxAttempts)
 		if err != nil {
+			if blockedErr := blockedUpstreamError(err); blockedErr != nil {
+				if hooks.OnRetryFailure != nil {
+					hooks.OnRetryFailure(blockedErr.Status, blockedErr.Message, blockedErr.Code)
+				}
+				config.Logger.Warn("[completion_runtime_empty_retry] upstream risk-control blocked retry", "surface", surface, "stream", opts.Stream, "retry_attempt", attempts, "error", err)
+				return
+			}
 			if dsclient.IsMutedError(err) {
 				if canRetryOnAlternateAccount(ctx, a, &assistantturn.OutputError{Status: http.StatusForbidden, Code: "account_muted"}, opts.RetryEnabled, &accountSwitchAttempted) {
 					switched, switchErr := startPayloadCompletionOnAlternateAccount(ctx, ds, a, payload, opts, maxAttempts)
@@ -222,10 +229,13 @@ func startPayloadCompletionOnAlternateAccount(ctx context.Context, ds DeepSeekCa
 	}
 	sessionID, err := ds.CreateSession(ctx, a, maxAttempts)
 	if err != nil {
-		return StartResult{}, authOutputError(a)
+		return StartResult{}, authOutputError(a, err)
 	}
 	pow, err := ds.GetPow(ctx, a, maxAttempts)
 	if err != nil {
+		if blockedErr := blockedUpstreamError(err); blockedErr != nil {
+			return StartResult{SessionID: sessionID}, blockedErr
+		}
 		return StartResult{SessionID: sessionID}, &assistantturn.OutputError{Status: http.StatusUnauthorized, Message: "Failed to get PoW (invalid token or unknown error).", Code: "error"}
 	}
 	nextPayload := clonePayload(payload)
@@ -240,6 +250,9 @@ func startPayloadCompletionOnAlternateAccount(ctx context.Context, ds DeepSeekCa
 	delete(nextPayload, "parent_message_id")
 	resp, err := ds.CallCompletion(ctx, a, nextPayload, pow, maxAttempts)
 	if err != nil {
+		if blockedErr := blockedUpstreamError(err); blockedErr != nil {
+			return StartResult{SessionID: sessionID, Payload: nextPayload, Pow: pow}, blockedErr
+		}
 		if dsclient.IsMutedError(err) {
 			return StartResult{SessionID: sessionID, Payload: nextPayload, Pow: pow}, &assistantturn.OutputError{Status: http.StatusForbidden, Message: "Account is muted by upstream.", Code: "account_muted"}
 		}

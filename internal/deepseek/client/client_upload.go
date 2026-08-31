@@ -141,6 +141,13 @@ func (c *Client) UploadFile(ctx context.Context, a *auth.RequestAuth, req Upload
 		config.Logger.Warn("[upload_file] failed", "status", resp.StatusCode, "code", code, "biz_code", bizCode, "msg", msg, "biz_msg", bizMsg, "account", a.AccountID, "filename", filename)
 		powHeader = ""
 		lastFailureMessage = failureMessage(msg, bizMsg, "upload file failed")
+		if block := dsprotocol.ClassifyUpstreamBlock(resp.StatusCode, resp.Header); block != dsprotocol.UpstreamBlockNone {
+			config.Logger.Warn(block.LogTag()+" upstream risk-control challenge detected", "account", a.AccountID, "filename", filename, "kind", block.String(), "status", resp.StatusCode)
+			lastFailureKind = FailureUpstreamBlocked
+			lastFailureMessage = "upstream risk-control challenge: " + block.String()
+			attempts++
+			continue
+		}
 		if isTokenInvalid(resp.StatusCode, code, bizCode, msg, bizMsg) || isAuthIndicativeBizFailure(msg, bizMsg) {
 			lastFailureKind = authFailureKind(a.UseConfigToken)
 		} else {

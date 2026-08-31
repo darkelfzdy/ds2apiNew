@@ -34,17 +34,45 @@ const (
 	DeepSeekUploadTargetPath        = "/api/v0/file/upload_file"
 )
 
-// chromeMajorVersion 直接取自 transport 层，与 uTLS ClientHello 同源，
-// 避免两边各写一份常量后随依赖升级悄悄错开
-// （曾出现 TLS 指纹是 Chrome 133、User-Agent 却自称 128 的矛盾）。
-var chromeMajorVersion = transport.ChromeMajorVersion
+// Chrome 指纹的唯一权威来源是本包内嵌的 constants_shared.json（chrome 块），
+// Go 与 Node/Vercel 两侧读同一文件；transport 只接收推送值，不再各自写死。
+// 下面的内置表仅在 JSON 缺失/不完整时兑底，内容取自真实 Chrome 抓包。
+var chromeGreaseBrands = map[string]string{
+	"150": "\"Not;A=Brand\";v=\"8\"",
+	"151": "\"Not=A?Brand\";v=\"99\"",
+	"152": "\"Not?A_Brand\";v=\"24\"",
+}
 
-var chromeUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" + chromeMajorVersion + ".0.0.0 Safari/537.36"
+// chromeGreaseFallbackMajor 是查表未命中时的回退大版本（最新已知）。
+// GREASE 品牌串随 Chrome 大版本轮换，未知版本用最新已知值比用旧值更接近真实。
+var chromeGreaseFallbackMajor = "152"
 
-// chromeSecChUA 的 GREASE 品牌串和品牌顺序都随 Chrome 版本变化，
-// 这里的形式取自 chat.deepseek.com 网页版真实抓包（Chrome 150）。
-// 换版本时必须重新抓包核对，不能照着旧版本推。
-var chromeSecChUA = "\"Not;A=Brand\";v=\"8\", \"Chromium\";v=\"" + chromeMajorVersion + "\", \"Google Chrome\";v=\"" + chromeMajorVersion + "\""
+// ChromeGreaseBrand 返回当前生效 Chrome 大版本对应的 sec-ch-ua GREASE 品牌串。
+func ChromeGreaseBrand() string {
+	major := transport.ChromeMajorVersion()
+	if b, ok := chromeGreaseBrands[major]; ok {
+		return b
+	}
+	if b, ok := chromeGreaseBrands[chromeGreaseFallbackMajor]; ok {
+		return b
+	}
+	return chromeGreaseBrands["151"]
+}
+
+// chromeUserAgent 每次调用都从当前生效版本推导，因此环境变量/JSON
+// 任一来源变更后两层都不会错位（包级 var 会冻结 init 前的值）。
+func chromeUserAgent() string {
+	major := transport.ChromeMajorVersion()
+	return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" + major + ".0.0.0 Safari/537.36"
+}
+
+// chromeSecChUA 的 GREASE 品牌串随 Chrome 大版本轮换（查表，见 chromeGreaseBrands）。
+// 品牌「顺序」每次安装/会话随机、不是指纹信号（2026-08-31 真实 Chrome 152 实测
+// 与第三方抓包库顺位不一致），故顺序沿用此模板不换。
+func chromeSecChUA() string {
+	major := transport.ChromeMajorVersion()
+	return ChromeGreaseBrand() + ", \"Chromium\";v=\"" + major + "\", \"Google Chrome\";v=\"" + major + "\""
+}
 
 var defaultStaticBaseHeaders = map[string]string{
 	"Host":         "chat.deepseek.com",
@@ -70,24 +98,28 @@ var defaultStaticBaseHeaders = map[string]string{
 // 各自独立的合法值，否则伪造只会让情况变糟。
 //
 // webBrowserHeaders 是 platform=web 时 DeepSeek 网页版浏览器应有的头。
-var webBrowserHeaders = map[string]string{
-	"User-Agent":         chromeUserAgent,
-	"sec-ch-ua":          chromeSecChUA,
-	"sec-ch-ua-mobile":   "?0",
-	"sec-ch-ua-platform": "\"Windows\"",
-	"Origin":             "https://chat.deepseek.com",
-	"Referer":            "https://chat.deepseek.com/",
-	"sec-fetch-site":     "same-origin",
-	"sec-fetch-mode":     "cors",
-	"sec-fetch-dest":     "empty",
-	// 浏览器 fetch 发的是 */*，不是 application/json。
-	// 只覆盖 web 平台：登录接口沿用 App 风格头（见 LoginHeaders）。
-	"Accept": "*/*",
-	// 必须显式声明：否则 transport 会自动补一个只含 gzip 的 accept-encoding，
-	// 而自称 Chrome 却只接受 gzip 是明显异常。响应解压见 client.decompressBody。
-	"Accept-Encoding": "gzip, deflate, br, zstd",
-	// Chrome 12x+ 在 fetch/XHR 上会带 priority。
-	"priority": "u=1, i",
+// 必须是函数：UA / sec-ch-ua 依赖 constants_shared.json 推送的版本号，
+// 而 JSON 在 init 里才解析，包级 var 会冻结推送前的值。
+var webBrowserHeaders = func() map[string]string {
+	return map[string]string{
+		"User-Agent":         chromeUserAgent(),
+		"sec-ch-ua":          chromeSecChUA(),
+		"sec-ch-ua-mobile":   "?0",
+		"sec-ch-ua-platform": "\"Windows\"",
+		"Origin":             "https://chat.deepseek.com",
+		"Referer":            "https://chat.deepseek.com/",
+		"sec-fetch-site":     "same-origin",
+		"sec-fetch-mode":     "cors",
+		"sec-fetch-dest":     "empty",
+		// 浏览器 fetch 发的是 */*，不是 application/json。
+		// 只覆盖 web 平台：登录接口沿用 App 风格头（见 LoginHeaders）。
+		"Accept": "*/*",
+		// 必须显式声明：否则 transport 会自动补一个只含 gzip 的 accept-encoding，
+		// 而自称 Chrome 却只接受 gzip 是明显异常。响应解压见 client.decompressBody。
+		"Accept-Encoding": "gzip, deflate, br, zstd",
+		// Chrome 12x+ 在 fetch/XHR 上会带 priority。
+		"priority": "u=1, i",
+	}
 }
 
 // localeTimezones 把 locale 映射到 IANA 时区。偏移在请求时从时区数据实时计算，
@@ -159,8 +191,18 @@ type clientConstants struct {
 	Locale          string `json:"locale"`
 }
 
+// chromeConstants 是 Chrome 指纹的共享契约（constants_shared.json 的 chrome 块）。
+// 它是跨语言单一来源：Go 侧由此推送给 transport 决定 TLS 预设，
+// Node/Vercel 侧（internal/js/shared/deepseek-constants.js）读同一文件。
+type chromeConstants struct {
+	MajorVersion        string            `json:"major_version"`
+	GreaseFallbackMajor string            `json:"grease_fallback_major"`
+	GreaseBrands        map[string]string `json:"grease_brands"`
+}
+
 type sharedConstants struct {
 	Client              clientConstants   `json:"client"`
+	Chrome              chromeConstants   `json:"chrome"`
 	BaseHeaders         map[string]string `json:"base_headers"`
 	SkipContainsPattern []string          `json:"skip_contains_patterns"`
 	SkipExactPaths      []string          `json:"skip_exact_paths"`
@@ -176,7 +218,25 @@ func init() {
 	}
 	sharedClient = normalizeClientConstants(cfg.Client)
 	sharedBaseHeaderOverrides = cfg.BaseHeaders
+	applyChromeConstants(cfg.Chrome)
 	applySharedConstants(cfg)
+}
+
+// applyChromeConstants 把共享契约里的 Chrome 指纹数据合入内置回退表，
+// 并把大版本推送给 transport（环境变量优先，推送不会覆盖运维显式设置）。
+func applyChromeConstants(c chromeConstants) {
+	for major, brand := range c.GreaseBrands {
+		major = strings.TrimSpace(major)
+		brand = strings.TrimSpace(brand)
+		if major == "" || brand == "" {
+			continue
+		}
+		chromeGreaseBrands[major] = brand
+	}
+	if fb := strings.TrimSpace(c.GreaseFallbackMajor); fb != "" {
+		chromeGreaseFallbackMajor = fb
+	}
+	transport.SetChromeMajorVersion(strings.TrimSpace(c.MajorVersion))
 }
 
 func applySharedConstants(cfg sharedConstants) {
@@ -225,7 +285,7 @@ func BuildBaseHeaders(client clientConstants, overrides map[string]string) map[s
 	out["x-client-timezone-offset"] = TimezoneOffsetFor(locale)
 
 	if IsWebPlatform(client.Platform) {
-		for k, v := range webBrowserHeaders {
+		for k, v := range webBrowserHeaders() {
 			out[k] = v
 		}
 		out["Accept-Language"] = AcceptLanguageFor(locale)

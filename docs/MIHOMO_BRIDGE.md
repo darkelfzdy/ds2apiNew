@@ -178,3 +178,28 @@ ds2api 内置的 Mihomo 代理桥可以把机场订阅节点转换为本地独�
   反之纯 mihomo 变更也不会连带重写 `config.json`。
 - `api_port` 会自动从节点监听端口分配中排除，即使它落在 `base_port` 起始的
   端口区间内也不会被后续账号绑定占用。
+
+## 上游风控拦截分类（WAF / Cloudflare）
+
+DeepSeek 风控升级后，拦截不再只表现为“账号异常”。官方网页版前端
+（`main.js`）带了明确的判定逻辑，ds2api 按同一套规则识别，日志会打独立标签，
+便于把「出口 IP / 指纹被拦」与「账号本身被封/禁言/token 失效」分开处理：
+
+| 响应 | 日志标签 | 含义 |
+| --- | --- | --- |
+| `405` + `x-amzn-waf-action: captcha` | `[upstream_waf_captcha]` | AWS WAF 要求过验证码 |
+| `202` + `x-amzn-waf-action: challenge` | `[upstream_waf_challenge]` | AWS WAF 的 JS challenge |
+| `403` / `429` + `cf-mitigated: challenge` | `[upstream_cf_challenge]` | Cloudflare challenge（上游 http 配置里 `cloudflareEnabled: true`） |
+
+日志同时带 `kind` / `url` / `status` / `waf_action` / `cf_mitigated` / `account`
+字段，可直接检索。命中这些组合时：
+
+- 失败类型归为 `FailureUpstreamBlocked`（`upstream_blocked`），**不是**
+  账号封禁、也不是 token 失效；
+- **不会**因此触发 token 刷新或切号重试（刷新解决不了出口 IP 被拦），
+  避免把风控误判成账号问题；
+- 处置方向是**换出口节点/避开被拉黑的地区段**（`node_exclude`、测速重排），
+  而不是换账号或重置 token。
+
+普通 `401`、`403`、`429`（**不带**上述响应头）仍按既有鉴权/限流逻辑处理，
+不会打这些标签。

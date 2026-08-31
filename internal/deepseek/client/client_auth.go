@@ -50,6 +50,10 @@ func (c *Client) Login(ctx context.Context, acc config.Account) (string, error) 
 	if err != nil {
 		return "", err
 	}
+	if block := upstreamBlockFromPayload(resp); block != dsprotocol.UpstreamBlockNone {
+		config.Logger.Warn(block.LogTag()+" upstream risk-control challenge detected", "account", acc.Identifier(), "kind", block.String(), "op", "login")
+		return "", &RequestFailure{Op: "login", Kind: FailureUpstreamBlocked, Message: "upstream risk-control challenge: " + block.String()}
+	}
 	code := intFrom(resp["code"])
 	if code != 0 {
 		return "", fmt.Errorf("login failed: %v", resp["msg"])
@@ -323,6 +327,10 @@ func (c *Client) CreateSession(ctx context.Context, a *auth.RequestAuth, maxAtte
 				return sessionID, nil
 			}
 		}
+		if block := upstreamBlockFromPayload(resp); block != dsprotocol.UpstreamBlockNone {
+			config.Logger.Warn(block.LogTag()+" upstream risk-control challenge detected", "account", a.AccountID, "kind", block.String(), "status", status)
+			return "", &RequestFailure{Op: "create session", Kind: FailureUpstreamBlocked, Message: "upstream risk-control challenge: " + block.String()}
+		}
 		if ch := DetectCaptchaChallenge(resp); ch != nil {
 			config.Logger.Warn("[create_session] captcha challenge detected", "account", a.AccountID, "instruction", ch.Instruction, "image_url", ch.ImageURL, "rid", ch.Rid)
 			c.coolDownAfterCaptcha(a, "create_session")
@@ -390,6 +398,13 @@ func (c *Client) GetPowForTarget(ctx context.Context, a *auth.RequestAuth, targe
 				continue
 			}
 			return BuildPowHeader(challenge, answer)
+		}
+		if block := upstreamBlockFromPayload(resp); block != dsprotocol.UpstreamBlockNone {
+			config.Logger.Warn(block.LogTag()+" upstream risk-control challenge detected", "account", a.AccountID, "target_path", targetPath, "kind", block.String(), "status", status)
+			lastFailureKind = FailureUpstreamBlocked
+			lastFailureMessage = "upstream risk-control challenge: " + block.String()
+			attempts++
+			continue
 		}
 		if ch := DetectCaptchaChallenge(resp); ch != nil {
 			config.Logger.Warn("[get_pow] captcha challenge detected", "account", a.AccountID, "target_path", targetPath, "instruction", ch.Instruction, "image_url", ch.ImageURL, "rid", ch.Rid)

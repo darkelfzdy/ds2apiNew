@@ -31,7 +31,7 @@ func StartCompletionWithSegments(ctx context.Context, ds DeepSeekCaller, a *auth
 
 	sessionID, err := ds.CreateSession(ctx, a, maxAttempts)
 	if err != nil {
-		return StartResult{Request: stdReq}, authOutputError(a)
+		return StartResult{Request: stdReq}, authOutputError(a, err)
 	}
 
 	finalPow, finalPayload, outErr := fireSegmentPayloads(ctx, ds, a, stdReq, sessionID, segments, maxAttempts)
@@ -40,6 +40,9 @@ func StartCompletionWithSegments(ctx context.Context, ds DeepSeekCaller, a *auth
 	}
 	resp, err := ds.CallCompletion(ctx, a, finalPayload, finalPow, maxAttempts)
 	if err != nil {
+		if blockedErr := blockedUpstreamError(err); blockedErr != nil {
+			return StartResult{SessionID: sessionID, Payload: finalPayload, Pow: finalPow, Request: stdReq}, blockedErr
+		}
 		if dsclient.IsMutedError(err) {
 			return StartResult{SessionID: sessionID, Payload: finalPayload, Pow: finalPow, Request: stdReq}, &assistantturn.OutputError{Status: http.StatusForbidden, Message: "Account is muted by upstream.", Code: "account_muted"}
 		}
@@ -63,6 +66,9 @@ func fireSegmentPayloads(ctx context.Context, ds DeepSeekCaller, a *auth.Request
 	for i := 0; i < len(segments)-1; i++ {
 		segPow, err := ds.GetPow(ctx, a, maxAttempts)
 		if err != nil {
+			if blockedErr := blockedUpstreamError(err); blockedErr != nil {
+				return "", nil, blockedErr
+			}
 			return "", nil, &assistantturn.OutputError{Status: http.StatusUnauthorized, Message: "Failed to get PoW (invalid token or unknown error).", Code: "error"}
 		}
 		segPayload := stdReq.CompletionPayloadWithParentAndPrompt(sessionID, parentMessageID, segments[i])
@@ -85,6 +91,9 @@ func fireSegmentPayloads(ctx context.Context, ds DeepSeekCaller, a *auth.Request
 
 	finalPow, err := ds.GetPow(ctx, a, maxAttempts)
 	if err != nil {
+		if blockedErr := blockedUpstreamError(err); blockedErr != nil {
+			return "", nil, blockedErr
+		}
 		return "", nil, &assistantturn.OutputError{Status: http.StatusUnauthorized, Message: "Failed to get PoW (invalid token or unknown error).", Code: "error"}
 	}
 	finalPayload := stdReq.CompletionPayloadWithParentAndPrompt(sessionID, parentMessageID, segments[len(segments)-1])
@@ -97,6 +106,9 @@ func fireSegmentPayloads(ctx context.Context, ds DeepSeekCaller, a *auth.Request
 func finishSegmentFallback(ctx context.Context, ds DeepSeekCaller, a *auth.RequestAuth, stdReq promptcompat.StandardRequest, sessionID string, parentMessageID int, fallbackPrompt string, maxAttempts int) (string, map[string]any, *assistantturn.OutputError) {
 	finalPow, err := ds.GetPow(ctx, a, maxAttempts)
 	if err != nil {
+		if blockedErr := blockedUpstreamError(err); blockedErr != nil {
+			return "", nil, blockedErr
+		}
 		return "", nil, &assistantturn.OutputError{Status: http.StatusUnauthorized, Message: "Failed to get PoW (invalid token or unknown error).", Code: "error"}
 	}
 	finalPayload := stdReq.CompletionPayloadWithParentAndPrompt(sessionID, parentMessageID, fallbackPrompt)

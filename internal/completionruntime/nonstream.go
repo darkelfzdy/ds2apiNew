@@ -77,7 +77,7 @@ func PrepareCompletionPayload(ctx context.Context, ds DeepSeekCaller, a *auth.Re
 	var err error
 	sessionID, err = ds.CreateSession(ctx, a, maxAttempts)
 	if err != nil {
-		return "", "", nil, authOutputError(a)
+		return "", "", nil, authOutputError(a, err)
 	}
 	if segments := shouldSegmentExpertPrompt(stdReq, opts); len(segments) > 1 {
 		finalPow, finalPayload, segErr := fireSegmentPayloads(ctx, ds, a, stdReq, sessionID, segments, maxAttempts)
@@ -88,6 +88,9 @@ func PrepareCompletionPayload(ctx context.Context, ds DeepSeekCaller, a *auth.Re
 	}
 	pow, err = ds.GetPow(ctx, a, maxAttempts)
 	if err != nil {
+		if blockedErr := blockedUpstreamError(err); blockedErr != nil {
+			return sessionID, "", nil, blockedErr
+		}
 		return sessionID, "", nil, &assistantturn.OutputError{Status: http.StatusUnauthorized, Message: "Failed to get PoW (invalid token or unknown error).", Code: "error"}
 	}
 	return sessionID, pow, stdReq.CompletionPayload(sessionID), nil
@@ -105,15 +108,21 @@ func startCompletionOnce(ctx context.Context, ds DeepSeekCaller, a *auth.Request
 	}
 	sessionID, err := ds.CreateSession(ctx, a, maxAttempts)
 	if err != nil {
-		return StartResult{Request: stdReq}, authOutputError(a)
+		return StartResult{Request: stdReq}, authOutputError(a, err)
 	}
 	pow, err := ds.GetPow(ctx, a, maxAttempts)
 	if err != nil {
+		if blockedErr := blockedUpstreamError(err); blockedErr != nil {
+			return StartResult{SessionID: sessionID, Request: stdReq}, blockedErr
+		}
 		return StartResult{SessionID: sessionID, Request: stdReq}, &assistantturn.OutputError{Status: http.StatusUnauthorized, Message: "Failed to get PoW (invalid token or unknown error).", Code: "error"}
 	}
 	payload := stdReq.CompletionPayload(sessionID)
 	resp, err := ds.CallCompletion(ctx, a, payload, pow, maxAttempts)
 	if err != nil {
+		if blockedErr := blockedUpstreamError(err); blockedErr != nil {
+			return StartResult{SessionID: sessionID, Payload: payload, Pow: pow, Request: stdReq}, blockedErr
+		}
 		if dsclient.IsMutedError(err) {
 			return StartResult{SessionID: sessionID, Payload: payload, Pow: pow, Request: stdReq}, &assistantturn.OutputError{Status: http.StatusForbidden, Message: "Account is muted by upstream.", Code: "account_muted"}
 		}
@@ -234,6 +243,9 @@ func ExecuteNonStreamStartedWithRetry(ctx context.Context, ds DeepSeekCaller, a 
 		retryPayload := shared.ClonePayloadForEmptyOutputRetry(payload, parentMessageID)
 		nextResp, err := ds.CallCompletion(ctx, a, retryPayload, retryPow, maxAttempts)
 		if err != nil {
+			if blockedErr := blockedUpstreamError(err); blockedErr != nil {
+				return NonStreamResult{SessionID: sessionID, Payload: payload, Turn: turn, Attempts: attempts}, blockedErr
+			}
 			return NonStreamResult{SessionID: sessionID, Payload: payload, Turn: turn, Attempts: attempts}, &assistantturn.OutputError{Status: http.StatusInternalServerError, Message: "Failed to get completion.", Code: "error"}
 		}
 		payload = retryPayload
@@ -306,15 +318,21 @@ func startStandardCompletionOnAlternateAccount(ctx context.Context, ds DeepSeekC
 	}
 	sessionID, err := ds.CreateSession(ctx, a, maxAttempts)
 	if err != nil {
-		return StartResult{}, authOutputError(a)
+		return StartResult{}, authOutputError(a, err)
 	}
 	pow, err := ds.GetPow(ctx, a, maxAttempts)
 	if err != nil {
+		if blockedErr := blockedUpstreamError(err); blockedErr != nil {
+			return StartResult{SessionID: sessionID}, blockedErr
+		}
 		return StartResult{SessionID: sessionID}, &assistantturn.OutputError{Status: http.StatusUnauthorized, Message: "Failed to get PoW (invalid token or unknown error).", Code: "error"}
 	}
 	payload := stdReq.CompletionPayload(sessionID)
 	resp, err := ds.CallCompletion(ctx, a, payload, pow, maxAttempts)
 	if err != nil {
+		if blockedErr := blockedUpstreamError(err); blockedErr != nil {
+			return StartResult{SessionID: sessionID, Payload: payload, Pow: pow}, blockedErr
+		}
 		if dsclient.IsMutedError(err) {
 			return StartResult{SessionID: sessionID, Payload: payload, Pow: pow}, &assistantturn.OutputError{Status: http.StatusForbidden, Message: "Account is muted by upstream.", Code: "account_muted"}
 		}
@@ -370,7 +388,13 @@ func buildOptions(stdReq promptcompat.StandardRequest, prompt string, opts Optio
 	}
 }
 
-func authOutputError(a *auth.RequestAuth) *assistantturn.OutputError {
+// authOutputError 映射会话创建类失败。上游风控拦截（WAF / Cloudflare challenge）
+// 拦的是出口 IP/指纹，不是账号 token：沿用 401“请重新登录”会把运维引向错误方向，
+// 因此优先判断拦截并返回 502。
+func authOutputError(a *auth.RequestAuth, err error) *assistantturn.OutputError {
+	if blockedErr := blockedUpstreamError(err); blockedErr != nil {
+		return blockedErr
+	}
 	if a != nil && a.UseConfigToken {
 		return &assistantturn.OutputError{Status: http.StatusUnauthorized, Message: "Account token is invalid. Please re-login the account in admin.", Code: "error"}
 	}

@@ -63,7 +63,7 @@ func newHTTPCloakClient(timeout time.Duration, proxyURL string) *httpcloak.Clien
 	if proxyURL != "" {
 		opts = append(opts, httpcloak.WithTCPProxy(proxyURL))
 	}
-	client := httpcloak.NewClient("chrome-150-windows", opts...)
+	client := httpcloak.NewClient(ResolvedTLSPresetName(), opts...)
 	client.SetHeaderOrder(mergeHeaderOrder(nil, chromeHeaderOrder))
 	return client
 }

@@ -13,6 +13,7 @@ import (
 
 	"ds2api/internal/auth"
 	"ds2api/internal/config"
+	dstransport "ds2api/internal/deepseek/transport"
 	"ds2api/internal/server"
 	"ds2api/internal/webui"
 )
@@ -22,6 +23,17 @@ func main() {
 		config.Logger.Warn("[dotenv] load failed", "error", err)
 	}
 	config.RefreshLogger()
+	// .env 加载完才能读到 DS2API_CHROME_MAJOR_VERSION；非法值会被忽略并提醒，
+	// 避免运维以为换了版本、实际还在用共享契约里的值。
+	if rejected := dstransport.RefreshChromeVersionFromEnv(); rejected != "" {
+		config.Logger.Warn("[chrome] invalid DS2API_CHROME_MAJOR_VERSION ignored",
+			"value", rejected,
+			"using", dstransport.ChromeMajorVersion(),
+			"hint", "must be a Chrome major version number (>= 133)")
+	}
+	config.Logger.Info("[chrome] web-client fingerprint",
+		"major", dstransport.ChromeMajorVersion(),
+		"tls_preset", dstransport.ResolvedTLSPresetName())
 	webui.EnsureBuiltOnStartup()
 	_ = auth.AdminKey()
 	app, err := server.NewApp()

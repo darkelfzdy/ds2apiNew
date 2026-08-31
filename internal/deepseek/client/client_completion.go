@@ -29,21 +29,31 @@ func (c *Client) CallCompletion(ctx context.Context, a *auth.RequestAuth, payloa
 	if captureSession != nil {
 		resp.Body = captureSession.WrapBody(resp.Body, resp.StatusCode)
 	}
-	if resp.StatusCode == http.StatusOK {
-		newBody, muted, muteUntil, err := detectMutedCompletion(resp.Body)
-		if err != nil {
-			config.Logger.Warn("[deepseek_completion] failed to inspect response body for mute detection", "account", a.AccountID, "error", err)
-		}
-		if muted {
+	if resp.StatusCode != http.StatusOK {
+		// 非 200 初始响应：此刻 body 未读，先对响应头做上游风控挑战分类。
+		// 命中挑战时归为 FailureUpstreamBlocked 并向上报错：这是「出口 IP/指纹被拦」，
+		// 让上层能区别于 muted/token 失效，而不是拿着挑站页去解析 SSE。
+		if block := dsprotocol.ClassifyUpstreamBlock(resp.StatusCode, resp.Header); block != dsprotocol.UpstreamBlockNone {
+			config.Logger.Warn(block.LogTag()+" upstream risk-control challenge detected", "account", a.AccountID, "kind", block.String(), "status", resp.StatusCode)
 			_ = resp.Body.Close()
-			c.persistMutedUntil(a.AccountID, muteUntil)
-			return nil, &RequestFailure{Op: "completion", Kind: FailureMuted, Message: "user is muted"}
+			return nil, &RequestFailure{Op: "completion", Kind: FailureUpstreamBlocked, Message: "upstream risk-control challenge: " + block.String()}
 		}
-		if newBody != nil {
-			resp.Body = newBody
-		}
-		resp = c.wrapCompletionWithAutoContinue(ctx, a, payload, powResp, resp)
+		return resp, nil
 	}
+	// 200：保留 muted 账号检测与 auto-continue 包装。
+	newBody, muted, muteUntil, err := detectMutedCompletion(resp.Body)
+	if err != nil {
+		config.Logger.Warn("[deepseek_completion] failed to inspect response body for mute detection", "account", a.AccountID, "error", err)
+	}
+	if muted {
+		_ = resp.Body.Close()
+		c.persistMutedUntil(a.AccountID, muteUntil)
+		return nil, &RequestFailure{Op: "completion", Kind: FailureMuted, Message: "user is muted"}
+	}
+	if newBody != nil {
+		resp.Body = newBody
+	}
+	resp = c.wrapCompletionWithAutoContinue(ctx, a, payload, powResp, resp)
 	return resp, nil
 }
 

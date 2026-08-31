@@ -135,10 +135,10 @@ func printOurHeaders(locale string) {
 		fmt.Printf("  %-26s %s\n", kv[0]+":", redact(kv[0], kv[1]))
 	}
 
-	fmt.Printf("\n[HTTP 层] 自称 Chrome %s\n", trans.ChromeMajorVersion)
-	fmt.Printf("[TLS 层] uTLS ClientHello = Chrome %s", trans.TLSChromeVersion)
-	if trans.ChromeMajorVersion != trans.TLSChromeVersion {
-		fmt.Printf("  <- 落后于 UA，uTLS 目前最新只到这一版")
+	fmt.Printf("\n[HTTP 层] 自称 Chrome %s\n", trans.ChromeMajorVersion())
+	fmt.Printf("[TLS 层] httpcloak 预设 = %s (ClientHello = Chrome %s)", trans.ResolvedTLSPresetName(), trans.TLSChromeVersion())
+	if trans.ChromeMajorVersion() != trans.TLSChromeVersion() {
+		fmt.Printf("  <- HTTP 层领先 TLS 层，已解析为 ≤ 请求版本的最新可用预设（自洽，非矛盾）")
 	}
 	fmt.Println()
 	fmt.Println("[HTTP/2] SETTINGS 1:65536;2:0;4:6291456;6:262144 | WINDOW_UPDATE 15663105")

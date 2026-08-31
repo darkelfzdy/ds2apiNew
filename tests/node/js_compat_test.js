@@ -26,7 +26,7 @@ test('js shared constants derive client headers from shared json', () => {
   // 真实网页版抓包确认 platform=web 同样携带此头。
   assert.equal(deepseekConstants.BASE_HEADERS['x-client-bundle-id'], 'com.deepseek.chat');
   assert.equal(deepseekConstants.BASE_HEADERS['Content-Type'], 'application/json');
-  // web 平台应使用 Chrome User-Agent，与 Go 侧 utls.HelloChrome_Auto 一致。
+  // web 平台应使用 Chrome User-Agent，与 Go 侧 httpcloak 预设同源（见 constants_shared.json）。
   assert.ok(deepseekConstants.BASE_HEADERS['User-Agent'].includes('Chrome'), `unexpected user agent=${deepseekConstants.BASE_HEADERS['User-Agent']}`);
   for (const h of ['sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform', 'sec-fetch-site', 'sec-fetch-mode', 'sec-fetch-dest', 'Referer', 'Origin', 'Accept-Language']) {
     assert.ok(deepseekConstants.BASE_HEADERS[h], `expected browser header missing: ${h}`);
@@ -34,6 +34,33 @@ test('js shared constants derive client headers from shared json', () => {
   for (const h of ['accept-encoding', 'accept-charset']) {
     assert.equal(deepseekConstants.BASE_HEADERS[h], undefined, `unexpected header present: ${h}`);
   }
+});
+
+// 跨语言单一来源守卫：Chrome 指纹必须来自 constants_shared.json（Go 侧读同一文件）。
+// 谁在 JS 里单独改版本号或 GREASE 串而不改 JSON，本用例直接失败。
+test('js shared constants derive Chrome fingerprint from shared json', () => {
+  const shared = readJSON(path.resolve(__dirname, '../../internal/deepseek/protocol/constants_shared.json'));
+  const chrome = shared.chrome;
+  assert.ok(chrome && chrome.major_version, 'chrome.major_version missing from constants_shared.json');
+  assert.ok(chrome.grease_brands && Object.keys(chrome.grease_brands).length > 0, 'chrome.grease_brands missing');
+
+  const envMajor = String(process.env.DS2API_CHROME_MAJOR_VERSION || '').trim();
+  if (/^\d+$/.test(envMajor) && Number(envMajor) >= 133) {
+    assert.equal(deepseekConstants.CHROME_MAJOR_VERSION, envMajor, 'valid env override must win');
+    return;
+  }
+  const major = chrome.major_version;
+  assert.equal(deepseekConstants.CHROME_MAJOR_VERSION, major);
+  assert.ok(deepseekConstants.CHROME_USER_AGENT.includes(`Chrome/${major}.0.0.0`), `UA=${deepseekConstants.CHROME_USER_AGENT}`);
+
+  const expectedGrease = chrome.grease_brands[major] || chrome.grease_brands[chrome.grease_fallback_major];
+  assert.ok(expectedGrease, `no GREASE brand for major=${major} and no fallback`);
+  assert.equal(
+    deepseekConstants.CHROME_SEC_CH_UA,
+    `${expectedGrease}, "Chromium";v="${major}", "Google Chrome";v="${major}"`,
+  );
+  assert.equal(deepseekConstants.BASE_HEADERS['sec-ch-ua'], deepseekConstants.CHROME_SEC_CH_UA);
+  assert.equal(deepseekConstants.BASE_HEADERS['User-Agent'], deepseekConstants.CHROME_USER_AGENT);
 });
 
 test('js compat: sse fixtures', () => {
